@@ -1,6 +1,13 @@
-import type { channelSession } from "../agent/index.ts";
+import { type channelSession, planLimits, planLimitsSeen } from "../agent/index.ts";
 
-type Window = { utilization: number | null; resets_at: string | null } | null | undefined;
+type Window = { percent: number; resetsAt: number };
+
+const labels: Record<string, string> = {
+  five_hour: "Session limit",
+  seven_day: "Weekly · all models",
+  seven_day_opus: "Weekly · Opus",
+  seven_day_sonnet: "Weekly · Sonnet",
+};
 
 // ▰▰▰▱▱▱▱▱▱▱ 30%
 function bar(percent: number) {
@@ -8,13 +15,13 @@ function bar(percent: number) {
   return `${"▰".repeat(filled)}${"▱".repeat(10 - filled)} ${Math.round(percent)}%`;
 }
 
-function limit(label: string, window: Window) {
-  if (window?.utilization == null) return [];
-  // Discord renders <t:…:R> as a live "in 2 hours" in the viewer's own timezone
-  const resets = window.resets_at
-    ? ` · resets <t:${Math.floor(Date.parse(window.resets_at) / 1000)}:R>`
-    : "";
-  return [`**${label}**`, `${bar(window.utilization)}${resets}`];
+// Discord renders <t:…:R> as a live "in 2 hours" in the viewer's own timezone
+function relative(ms: number) {
+  return `<t:${Math.floor(ms / 1000)}:R>`;
+}
+
+function limit(label: string, { percent, resetsAt }: Window) {
+  return [`**${label}**`, `${bar(percent)}${resetsAt ? ` · resets ${relative(resetsAt)}` : ""}`];
 }
 
 // The fun parts of Claude Code's /usage: plan limits, then this conversation
@@ -26,15 +33,30 @@ export async function usageReport(session: ReturnType<typeof channelSession>) {
     context: await query.getContextUsage({ detail: "summary" }),
   }));
 
+  // The usage endpoint needs a full login; a `claude setup-token` token only
+  // gets what the last turn's rate limit headers said
+  const windows = new Map<string, Window>();
   const limits = usage.rate_limits;
-  const lines = [
-    ...limit("Session limit", limits?.five_hour),
-    ...limit("Weekly · all models", limits?.seven_day),
-    ...(limits?.model_scoped ?? []).flatMap((window) =>
-      limit(`Weekly · ${window.display_name}`, window),
-    ),
-  ];
-  if (!lines.length) lines.push("Plan limits aren't available for this login");
+  const scoped = (limits?.model_scoped ?? []).map(
+    (w) => [`Weekly · ${w.display_name}`, w] as const,
+  );
+  for (const [label, window] of [
+    ...Object.keys(labels).map((type) => [labels[type]!, limits?.[type as "five_hour"]] as const),
+    ...scoped,
+  ])
+    if (window?.utilization != null)
+      windows.set(label, {
+        percent: window.utilization,
+        resetsAt: window.resets_at ? Date.parse(window.resets_at) : 0,
+      });
+  const fromHeaders = !windows.size;
+  if (fromHeaders)
+    for (const [type, window] of planLimits) if (labels[type]) windows.set(labels[type], window);
+
+  const lines = [...windows].flatMap(([label, window]) => limit(label, window));
+  if (!lines.length) lines.push("Plan limits show up after the first reply");
+  else if (fromHeaders && planLimitsSeen)
+    lines.push(`-# as of ${relative(planLimitsSeen.getTime())}`);
 
   const { effort } = session.setup;
   const cost = usage.session.total_cost_usd;

@@ -1,6 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type EffortLevel, type Options, type Query, query } from "@anthropic-ai/claude-agent-sdk";
+import {
+  type EffortLevel,
+  type Options,
+  type Query,
+  query,
+  type SDKRateLimitInfo,
+} from "@anthropic-ai/claude-agent-sdk";
 import { config, secrets, workspace } from "../config.ts";
 import harnessPrompt from "./prompt.md" with { type: "text" };
 
@@ -70,6 +76,23 @@ function now() {
   });
 }
 
+// Plan usage as of the latest turn, from the rate limit headers Claude Code
+// passes on. Unlike the usage endpoint this works with `claude setup-token` logins
+export const planLimits = new Map<string, { percent: number; resetsAt: number }>();
+export let planLimitsSeen: Date | undefined;
+
+function recordLimits(info: SDKRateLimitInfo) {
+  // unifiedWindows isn't in the SDK's types yet, but carries every window at once
+  type Windows = Record<string, { utilization?: number; resetsAt?: number }>;
+  const windows = (info as { unifiedWindows?: Windows }).unifiedWindows ?? {
+    [info.rateLimitType ?? ""]: info,
+  };
+  for (const [type, { utilization, resetsAt }] of Object.entries(windows))
+    if (type && utilization !== undefined)
+      planLimits.set(type, { percent: utilization * 100, resetsAt: (resetsAt ?? 0) * 1000 });
+  planLimitsSeen = new Date();
+}
+
 // A prompt that never sends, so control requests can run against a
 // conversation without starting a turn
 async function* idle(): AsyncGenerator<never> {
@@ -127,6 +150,8 @@ function createSession(name?: string) {
           if (turnGeneration !== generation) continue;
           state.id = message.session_id;
           save();
+        } else if (message.type === "rate_limit_event") {
+          recordLimits(message.rate_limit_info);
         } else if (message.type === "result") {
           reply =
             message.subtype === "success"
