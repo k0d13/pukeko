@@ -11,6 +11,10 @@
 # opus, sonnet, or a full model ID. Defaults to Claude Code's default
 # model = "opus"
 
+# low, medium, high, xhigh or max. Defaults to the model's default
+# Both can be changed per conversation with /new
+# effort = "high"
+
 # Run the agent's shell in an OS sandbox (needs bubblewrap + socat on Linux)
 # This is what actually stops `cat .env`; without it only the Read tool is blocked
 # sandbox = true

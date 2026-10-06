@@ -1,9 +1,9 @@
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Cron } from "croner";
-import { jobSession } from "./agent.ts";
+import { jobSession } from "./agent/index.ts";
 import { config, workspace } from "./config.ts";
-import { send } from "./discord.ts";
+import { send } from "./discord/index.ts";
 
 type Job = { id: string; schedule: string; channel?: string; prompt: string };
 

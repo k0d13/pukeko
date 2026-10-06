@@ -54,6 +54,13 @@ case ":$PATH:" in
   *) say "Add $bin_dir to your PATH, e.g. echo 'export PATH=\"$bin_dir:\$PATH\"' >> ~/.profile" ;;
 esac
 
+# Re-running this upgrades, so pick up the new binary if the service is running
+if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet pukeko 2>/dev/null; then
+  say "Restarting the pukeko service"
+  systemctl --user restart pukeko
+  exit 0
+fi
+
 "$bin_dir/pukeko" init
 
 cat <<EOF

@@ -1,10 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type Options, query } from "@anthropic-ai/claude-agent-sdk";
-import { config, secrets, workspace } from "./config.ts";
+import { type EffortLevel, type Options, type Query, query } from "@anthropic-ai/claude-agent-sdk";
+import { config, secrets, workspace } from "../config.ts";
 import harnessPrompt from "./prompt.md" with { type: "text" };
 
 type Session = ReturnType<typeof createSession>;
+
+// Picked with /new and fixed for the life of a conversation, since switching
+// partway through loses the prompt cache
+export type Setup = { model: string; effort: EffortLevel | "" };
 
 const stateDir = join(workspace, ".pukeko");
 mkdirSync(stateDir, { recursive: true });
@@ -17,7 +21,6 @@ if (!claudePath) throw new Error("`claude` not found on PATH, install Claude Cod
 // Everything except the conversation, the same for every turn
 const baseOptions: Options = {
   cwd: workspace,
-  model: config.agent.model || undefined,
   pathToClaudeCodeExecutable: claudePath,
   env: {
     // Drop anything also in .env, in case Bun auto-loaded it from the cwd
@@ -67,44 +70,63 @@ function now() {
   });
 }
 
+// A prompt that never sends, so control requests can run against a
+// conversation without starting a turn
+async function* idle(): AsyncGenerator<never> {
+  await new Promise(() => {});
+}
+
 // One Claude Code conversation. Turns queue up and run one at a time. With a
-// `name` the session ID is saved in .pukeko/ so it resumes across restarts
+// `name` it's saved in .pukeko/ so it resumes across restarts
 function createSession(name?: string) {
-  const file = name && join(stateDir, `${name}.session`);
-  let sessionId = file && existsSync(file) ? readFileSync(file, "utf8").trim() : "";
+  const file = name && join(stateDir, `${name}.json`);
+  let state: Setup & { id: string } = {
+    model: config.agent.model,
+    effort: config.agent.effort,
+    id: "",
+    ...(file && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {}),
+  };
   let current: AbortController | undefined;
   let queue = Promise.resolve();
-  // Bumped by forget() so a turn already in flight can't save its ID afterwards
+  // Bumped by restart() so a turn already in flight can't save its ID afterwards
   let generation = 0;
 
-  function forget() {
-    generation++;
-    sessionId = "";
-    if (file) rmSync(file, { force: true });
+  function save() {
+    if (file) writeFileSync(file, JSON.stringify(state));
   }
 
-  async function runTurn(text: string): Promise<string> {
+  function options(): Options {
+    return {
+      ...baseOptions,
+      model: state.model || undefined,
+      effort: state.effort || undefined,
+      resume: state.id || undefined,
+      mcpServers: mcpServers(),
+    };
+  }
+
+  function restart(setup: Partial<Setup> = {}) {
+    generation++;
+    state = { ...state, ...setup, id: "" };
+    save();
+  }
+
+  async function runTurn(prompt: string): Promise<string> {
     const abort = (current = new AbortController());
     const turnGeneration = generation;
-    const resuming = Boolean(sessionId);
+    const resuming = Boolean(state.id);
     let started = false;
     let reply = "";
     try {
-      const turn = query({
-        prompt: `${text}\n\n[Current time: ${now()}]`,
-        options: {
-          ...baseOptions,
-          resume: sessionId || undefined,
-          mcpServers: mcpServers(),
-          abortController: abort,
-        },
-      });
-      for await (const message of turn) {
+      for await (const message of query({
+        prompt,
+        options: { ...options(), abortController: abort },
+      })) {
         if (message.type === "system" && message.subtype === "init") {
           started = true;
           if (turnGeneration !== generation) continue;
-          sessionId = message.session_id;
-          if (file) writeFileSync(file, sessionId);
+          state.id = message.session_id;
+          save();
         } else if (message.type === "result") {
           reply =
             message.subtype === "success"
@@ -118,9 +140,9 @@ function createSession(name?: string) {
       console.error(error);
       // A saved session that can't be resumed fails before init, so start fresh
       if (resuming && !started) {
-        console.warn(`Couldn't resume session ${sessionId}, starting a new one`);
-        forget();
-        return runTurn(text);
+        console.warn(`Couldn't resume session ${state.id}, starting a new one`);
+        restart();
+        return runTurn(prompt);
       }
       return `⚠️ ${error instanceof Error ? error.message : error}`;
     } finally {
@@ -128,20 +150,44 @@ function createSession(name?: string) {
     }
   }
 
+  function enqueue(prompt: string) {
+    const turn = queue.then(() => runTurn(prompt));
+    queue = turn.then(() => {});
+    return turn;
+  }
+
   return {
+    get setup(): Setup {
+      return { model: state.model, effort: state.effort };
+    },
     ask(text: string) {
-      const turn = queue.then(() => runTurn(text));
-      queue = turn.then(() => {});
-      return turn;
+      return enqueue(`${text}\n\n[Current time: ${now()}]`);
+    },
+    // Claude Code's own /compact, summarising the conversation so far
+    async compact() {
+      if (!state.id) return "Nothing to compact yet";
+      const reply = await enqueue("/compact");
+      return reply.startsWith("⚠️") || reply.startsWith("⏹️") ? reply : "🗜️ Conversation compacted";
+    },
+    // Runs `fn` against this conversation without sending anything to Claude
+    async inspect<T>(fn: (query: Query) => Promise<T>) {
+      const q = query({ prompt: idle(), options: options() });
+      try {
+        return await fn(q);
+      } finally {
+        q.close();
+      }
     },
     // Whether there was a turn to stop
     stop() {
       current?.abort();
       return current !== undefined;
     },
-    reset() {
+    // Ends the conversation. Fields in `setup` change the next one's model or
+    // effort, the rest carry over
+    reset(setup: Partial<Setup> = {}) {
       current?.abort();
-      forget();
+      restart(setup);
     },
   };
 }

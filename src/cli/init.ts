@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import env from "../templates/.env.example" with { type: "text" };
-import gitignore from "../templates/.gitignore" with { type: "text" };
-import memoryIndex from "../templates/memory/README.md" with { type: "text" };
-import pukekoToml from "../templates/pukeko.toml" with { type: "text" };
+import env from "../../templates/.env.example" with { type: "text" };
+import gitignore from "../../templates/.gitignore" with { type: "text" };
+import memoryIndex from "../../templates/memory/README.md" with { type: "text" };
+import pukekoToml from "../../templates/pukeko.toml" with { type: "text" };
 
 // The bare minimum the harness needs, embedded in the binary and written on
 // first run. Personality (CLAUDE.md), integrations (.mcp.json) and jobs are

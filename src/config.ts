@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import { workspace } from "./workspace.ts";
 
 export { workspace };
@@ -17,7 +18,7 @@ if (!existsSync(tomlPath)) {
 const defaults = {
   owner: "",
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-  agent: { model: "", sandbox: true },
+  agent: { model: "", effort: "" as EffortLevel | "", sandbox: true },
   conversations: { scope: "channel" as "channel" | "shared" },
 };
 
@@ -61,6 +62,9 @@ if (config.owner && !/^\d{17,20}$/.test(config.owner))
   errors.push(`"owner" should be a Discord user ID (17-20 digits), not "${config.owner}"`);
 if (!["channel", "shared"].includes(config.conversations.scope))
   errors.push(`"conversations.scope" should be "channel" or "shared"`);
+export const effortLevels: EffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
+if (config.agent.effort && !effortLevels.includes(config.agent.effort))
+  errors.push(`"agent.effort" should be one of ${effortLevels.join(", ")}`);
 try {
   new Intl.DateTimeFormat(undefined, { timeZone: config.timezone });
 } catch {

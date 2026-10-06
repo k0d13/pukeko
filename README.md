@@ -7,14 +7,15 @@ the basics from `templates/`; personality, integrations and jobs are yours to ad
 
 ## How it works
 
-- `src/config.ts`: finds the workspace (`--workspace DIR`, `$PUKEKO_WORKSPACE`, or `~/.pukeko/workspace`),
-  reads `pukeko.toml` and `.env`. Secrets are never put in the agent's environment.
-- `src/agent.ts`: conversations, resumed across restarts (`/new` starts a fresh one). One per channel or one shared, per `[conversations] scope`; jobs get their own that lasts until restart.
+- `src/workspace.ts`: parses the command line and finds the workspace (`--workspace DIR`, `$PUKEKO_WORKSPACE`, or `~/.pukeko/workspace`).
+- `src/config.ts`: reads `pukeko.toml` and `.env`. Secrets are never put in the agent's environment.
+- `src/agent/`: conversations, resumed across restarts (`/new` starts a fresh one). One per channel or one shared, per `[conversations] scope`; jobs get their own that lasts until restart.
   Uses the server's `claude`, loads the workspace's `CLAUDE.md`, `.claude/`, and `.mcp.json` (`${VAR}` filled from `.env`).
   Blocks reading `.env` through settings the workspace can't override, plus an OS sandbox for Bash.
-- `src/discord.ts`: replies to the owner (from `pukeko.toml`, or the Discord application owner) in DMs, on @mention, and via `/ask`, `/new`, `/stop`.
+- `src/discord/`: replies to the owner (from `pukeko.toml`, or the Discord application owner) in DMs, on @mention, and via `/ask`, `/new` (optionally switching model or effort), `/stop`, `/compact` and `/usage`.
 - `src/jobs.ts`: runs `jobs/<id>/job.md` on cron or one-off schedules; rescans every minute.
-- `src/prompt.md`: the harness rules appended to Claude Code's system prompt.
+- `src/agent/prompt.md`: the harness rules appended to Claude Code's system prompt.
+- `src/cli/`: `pukeko init` and `pukeko service`.
 
 ## Build
 
