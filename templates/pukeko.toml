@@ -1,4 +1,4 @@
-# Pukeko config. Secrets go in .env, which the agent can't read
+# Pukeko config. Secrets go in .env
 # Everything here is optional; the commented values are the defaults
 
 # Discord user ID Pukeko answers to. Defaults to whoever owns the bot's Discord application
@@ -16,7 +16,7 @@
 # effort = "high"
 
 # Run the agent's shell in an OS sandbox (needs bubblewrap + socat on Linux)
-# This is what actually stops `cat .env`; without it only the Read tool is blocked
+# This is what actually stops `cat .pukeko/...`; without it only the Read tool is blocked
 # sandbox = true
 
 [conversations]

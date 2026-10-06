@@ -46,10 +46,10 @@ async function options(state: State): Promise<Options> {
     },
     systemPrompt: { type: "preset", preset: "claude_code", append: harnessPrompt },
     settingSources: ["project"],
-    // Flag settings outrank the workspace's own, so the agent can't edit its way out
+    // Flag settings outrank the workspace's own, so the agent can't edit its way into harness state
     settings: {
       permissions: {
-        deny: ["./.env", "./.env.*", "./.pukeko/**"].flatMap((p) => [`Read(${p})`, `Edit(${p})`]),
+        deny: ["./.pukeko/**"].flatMap((p) => [`Read(${p})`, `Edit(${p})`]),
       },
     },
     // The OS sandbox applies the deny rules to Bash too

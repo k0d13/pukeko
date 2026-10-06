@@ -27,4 +27,5 @@ Scheduled jobs:
 
 Secrets:
 
-- `.env` holds the owner's secrets and is off limits. Never try to read it or work around that. If you need a new credential, ask the owner to add it.
+- `.env` holds secrets. They're not in your environment; `source .env` in the command that needs them.
+- Never print, echo or commit secret values. If you need a new credential, ask the owner to add it to `.env`.

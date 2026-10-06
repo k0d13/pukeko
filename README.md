@@ -8,11 +8,12 @@ the basics from `templates/`; personality, integrations and jobs are yours to ad
 ## How it works
 
 - `src/cli/`: the `pukeko` command (`index.ts`), one file per subcommand: `start` (the default), `init`, `service`, `restart`, `logs` and `upgrade`.
-- `src/core/`: workspace paths (`--workspace DIR`, `$PUKEKO_WORKSPACE`, or `~/.pukeko/workspace`), config from `pukeko.toml` and `.env` and release info. Secrets are never put in the agent's environment.
+- `src/core/`: workspace paths (`--workspace DIR`, `$PUKEKO_WORKSPACE`, or `~/.pukeko/workspace`), config from `pukeko.toml` and `.env` and release info. Secrets are kept out of the agent's environment; it sources `.env` when a command needs them.
 - `src/agent/`: conversations, resumed across restarts (`/new` starts a fresh one). One per channel or one shared, per `[conversations] scope`; jobs get their own that lasts until restart.
   Uses the server's `claude`, loads the workspace's `CLAUDE.md`, `.claude/`, and `.mcp.json` (`${VAR}` filled from `.env`).
-  Blocks reading `.env` through settings the workspace can't override, plus an OS sandbox for Bash.
+  Blocks reading `.pukeko/` through settings the workspace can't override, plus an OS sandbox for Bash.
 - `src/discord/`: replies to the owner (from `pukeko.toml`, or the Discord application owner) in DMs, on @mention, and via `/ask`, `/new` (optionally switching model or effort), `/stop`, `/compact` and `/usage`.
+- `src/sync.ts`: if the workspace is a git repo, fast-forwards it from its remote every minute, so edits you push reach the agent.
 - `src/jobs.ts`: runs `jobs/<id>/job.md` on cron or one-off schedules; rescans every minute.
 - `src/agent/prompt.md`: the harness rules appended to Claude Code's system prompt.
 
@@ -42,7 +43,7 @@ Releases: push a `v*` tag and `.github/workflows/release.yml` builds the binarie
 
 - `pukeko.toml`: Pukeko itself. Every key is optional and documented in the generated file;
   unknown keys and wrong types are reported at startup.
-- `.env`: secrets. Only Pukeko reads it. Extra entries can be used in `.mcp.json` as `${NAME}`.
+- `.env`: secrets. Kept out of the agent's environment, but it can `source .env` when a command needs them. Extra entries can be used in `.mcp.json` as `${NAME}`.
 - `CLAUDE.md`, `.mcp.json`, `.claude/skills/`: personality, integrations and skills, as in any Claude Code project.
 - `.claude/settings.json`: normal Claude Code settings (hooks, permission rules, env, statusline...).
-  Pukeko layers its own rules on top: `.env` and `.pukeko/` are always denied, whatever this file says.
+  Pukeko layers its own rules on top: `.pukeko/` is always denied, whatever this file says.
