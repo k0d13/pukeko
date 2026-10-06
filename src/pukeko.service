@@ -1,0 +1,13 @@
+[Unit]
+Description=Pukeko assistant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart={exec} --workspace {workspace}
+Environment=PATH={path}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
