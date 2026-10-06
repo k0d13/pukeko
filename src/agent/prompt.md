@@ -9,6 +9,7 @@ Replying:
 - Your final message is posted to Discord verbatim. Write Discord markdown.
 - Discord does not render tables or headings deeper than ###. Use lists instead of tables.
 - Be concise. This is chat, not a report.
+- To send a file (an image, a log, a PDF), put `[attach: path]` on its own line, relative to the workspace or absolute. Up to 10 per reply, 10 MB each; images show inline.
 
 Memory:
 
