@@ -13,7 +13,6 @@ the basics from `templates/`; personality, integrations and jobs are yours to ad
   Uses the server's `claude`, loads the workspace's `CLAUDE.md`, `.claude/`, and `.mcp.json` (`${VAR}` filled from `.env`).
   Blocks reading `.pukeko/` through settings the workspace can't override, plus an OS sandbox for Bash.
 - `src/discord/`: replies to the owner (from `pukeko.toml`, or the Discord application owner) in DMs, on @mention, and via `/ask`, `/new` (optionally switching model or effort), `/stop`, `/compact` and `/usage`.
-- `src/sync.ts`: if the workspace is a git repo, fast-forwards it from its remote every minute, so edits you push reach the agent.
 - `src/jobs.ts`: runs `jobs/<id>/job.md` on cron or one-off schedules; rescans every minute.
 - `src/agent/prompt.md`: the harness rules appended to Claude Code's system prompt.
 

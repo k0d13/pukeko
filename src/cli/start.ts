@@ -4,14 +4,12 @@ import { paths } from "#/core/paths.ts";
 import { version } from "#/core/release.ts";
 import { startDiscord } from "#/discord/index.ts";
 import { startJobs } from "#/jobs.ts";
-import { startSync } from "#/sync.ts";
 
 export default defineCommand({
   meta: { name: "start", description: "Run Pukeko in the foreground (the default)" },
   async run() {
     await loadConfig();
     console.log(`Pukeko ${version} starting with workspace ${paths.workspace}`);
-    await startSync();
     await startDiscord();
     await startJobs();
   },
