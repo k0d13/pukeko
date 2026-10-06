@@ -1,11 +1,10 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { workspace } from "./config.ts";
 import unit from "./pukeko.service" with { type: "text" };
 
-// pukeko service install: a systemd user unit running this binary on this workspace.
-export function installService() {
+// A systemd user unit that runs this binary on this workspace
+export function installService(workspace: string) {
   const unitPath = join(homedir(), ".config/systemd/user/pukeko.service");
   mkdirSync(dirname(unitPath), { recursive: true });
   writeFileSync(

@@ -3,17 +3,21 @@ import {
   Client,
   Events,
   GatewayIntentBits,
-  type Interaction,
+  InteractionContextType,
   type Message,
+  MessageFlags,
   Partials,
-  REST,
-  Routes,
   SlashCommandBuilder,
+  type ChatInputCommandInteraction,
+  type Interaction,
 } from "discord.js";
 import { channelSession } from "./agent.ts";
 import { config, secrets } from "./config.ts";
 
-export const client = new Client({
+// pukeko.toml `owner`, or else whoever owns the Discord application, found at startup
+let ownerId = config.owner;
+
+const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
@@ -28,13 +32,19 @@ const commands = [
     .setName("ask")
     .setDescription("Ask Pukeko something")
     .addStringOption((o) => o.setName("prompt").setDescription("What to ask").setRequired(true)),
-  new SlashCommandBuilder()
-    .setName("new")
-    .setDescription("Start a fresh conversation in this channel"),
-  new SlashCommandBuilder().setName("stop").setDescription("Stop the current turn in this channel"),
-].map((c) => c.setDMPermission(true).toJSON());
+  new SlashCommandBuilder().setName("new").setDescription("Start a fresh conversation here"),
+  new SlashCommandBuilder().setName("stop").setDescription("Stop the current turn here"),
+].map((command) =>
+  command
+    .setContexts(
+      InteractionContextType.Guild,
+      InteractionContextType.BotDM,
+      InteractionContextType.PrivateChannel,
+    )
+    .toJSON(),
+);
 
-// Split on newlines where possible to stay under Discord's 2000 char limit.
+// Splits on newlines where possible to stay under Discord's 2000 character limit
 function chunks(text: string) {
   const out: string[] = [];
   let rest = text.trim() || "(no reply)";
@@ -48,20 +58,31 @@ function chunks(text: string) {
   return out;
 }
 
-// A channel by ID, or the owner's DMs when none is given.
-export async function resolveChannel(channelId?: string) {
+// Sends the first chunk one way (a reply) and the rest another (plain messages)
+async function deliver(
+  text: string,
+  first: (chunk: string) => Promise<unknown>,
+  rest: (chunk: string) => Promise<unknown>,
+) {
+  const [head, ...tail] = chunks(text);
+  await first(head!);
+  for (const chunk of tail) await rest(chunk);
+}
+
+// Posts to a channel, or to the owner's DMs without one
+export async function send(channelId: string | undefined, text: string) {
   const channel = channelId
     ? await client.channels.fetch(channelId)
-    : await (await client.users.fetch(config.ownerId)).createDM();
-  if (!channel?.isSendable()) throw new Error(`Can't send to ${channelId}`);
-  return channel;
+    : await (await client.users.fetch(ownerId)).createDM();
+  if (!channel?.isSendable()) throw new Error(`Can't send to channel ${channelId}`);
+  await deliver(
+    text,
+    (c) => channel.send(c),
+    (c) => channel.send(c),
+  );
 }
 
-export async function send(channelId: string | undefined, text: string) {
-  const channel = await resolveChannel(channelId);
-  for (const chunk of chunks(text)) await channel.send(chunk);
-}
-
+// The prompt for a message: where it came from, what it replies to, and attachments
 async function describe(message: Message) {
   const where =
     message.channel.type === ChannelType.DM
@@ -69,50 +90,34 @@ async function describe(message: Message) {
       : `#${"name" in message.channel ? message.channel.name : message.channelId}`;
   let text = message.content.replaceAll(new RegExp(`<@!?${client.user!.id}>`, "g"), "").trim();
   for (const a of message.attachments.values()) text += `\n[Attachment: ${a.name} ${a.url}]`;
-  if (message.reference?.messageId) {
-    const ref = await message.fetchReference().catch(() => undefined);
-    if (ref) text = `[Replying to ${ref.author.username}: ${ref.content}]\n\n${text}`;
-  }
+  const ref = message.reference?.messageId && (await message.fetchReference().catch(() => null));
+  if (ref) text = `[Replying to ${ref.author.username}: ${ref.content}]\n\n${text}`;
   return `[Discord message from owner in ${where}]\n${text}`;
 }
 
-client.on(Events.MessageCreate, async (message) => {
-  if (message.author.id !== config.ownerId) return;
-  const isDM = message.channel.type === ChannelType.DM;
-  if (!isDM && !message.mentions.users.has(client.user!.id)) return;
+async function handleMessage(message: Message) {
+  if (message.author.id !== ownerId) return;
+  if (message.channel.type !== ChannelType.DM && !message.mentions.users.has(client.user!.id))
+    return;
+  if (!message.channel.isSendable()) return;
 
-  const typing = setInterval(() => message.channel.sendTyping().catch(() => {}), 8000);
-  message.channel.sendTyping().catch(() => {});
+  const channel = message.channel;
+  const typing = () => channel.sendTyping().catch(() => {});
+  typing();
+  const interval = setInterval(typing, 8000);
   try {
     const reply = await channelSession(message.channelId).ask(await describe(message));
-    const [first, ...rest] = chunks(reply);
-    await message.reply(first!);
-    for (const chunk of rest) await message.channel.send(chunk);
-  } catch (error) {
-    console.error(error);
-  } finally {
-    clearInterval(typing);
-  }
-});
-
-client.on(Events.InteractionCreate, (interaction) => {
-  handleInteraction(interaction).catch(console.error);
-});
-
-async function handleInteraction(interaction: Interaction) {
-  if (!interaction.isChatInputCommand()) return;
-  if (interaction.user.id !== config.ownerId)
-    return interaction.reply({ content: "Not yours 🐦", ephemeral: true });
-
-  if (interaction.commandName === "new") {
-    channelSession(interaction.channelId).reset();
-    return interaction.reply("🆕 Fresh session started.");
-  }
-  if (interaction.commandName === "stop")
-    return interaction.reply(
-      channelSession(interaction.channelId).stop() ? "⏹️ Stopping." : "Nothing running.",
+    await deliver(
+      reply,
+      (c) => message.reply(c),
+      (c) => channel.send(c),
     );
+  } finally {
+    clearInterval(interval);
+  }
+}
 
+async function handleAsk(interaction: ChatInputCommandInteraction) {
   await interaction.deferReply();
   const prompt = interaction.options.getString("prompt", true);
   const reply = await channelSession(interaction.channelId).ask(
@@ -120,20 +125,53 @@ async function handleInteraction(interaction: Interaction) {
   );
   const text = `> ${prompt}\n\n${reply}`;
   try {
-    const [first, ...rest] = chunks(text);
-    await interaction.editReply(first!);
-    for (const chunk of rest) await interaction.followUp(chunk);
+    await deliver(
+      text,
+      (c) => interaction.editReply(c),
+      (c) => interaction.followUp(c),
+    );
   } catch {
-    // Interaction tokens expire after 15 minutes; post to the channel instead.
+    // Interaction tokens expire after 15 minutes, so long turns post to the channel
     await send(interaction.channelId, text);
   }
 }
 
+async function handleInteraction(interaction: Interaction) {
+  if (!interaction.isChatInputCommand()) return;
+  if (interaction.user.id !== ownerId)
+    return interaction.reply({ content: "Not yours 🐦", flags: MessageFlags.Ephemeral });
+
+  const session = channelSession(interaction.channelId);
+  switch (interaction.commandName) {
+    case "ask":
+      return handleAsk(interaction);
+    case "new":
+      session.reset();
+      return interaction.reply("🆕 Fresh conversation started");
+    case "stop":
+      return interaction.reply(session.stop() ? "⏹️ Stopping" : "Nothing running");
+  }
+}
+
+client.on(Events.MessageCreate, (message) => {
+  handleMessage(message).catch(console.error);
+});
+client.on(Events.InteractionCreate, (interaction) => {
+  handleInteraction(interaction).catch(console.error);
+});
+
 export async function startDiscord() {
-  await new REST()
-    .setToken(secrets.DISCORD_TOKEN!)
-    .put(Routes.applicationCommands(config.discordAppId), { body: commands });
+  const ready = new Promise((resolve) => client.once(Events.ClientReady, resolve));
   await client.login(secrets.DISCORD_TOKEN);
-  await new Promise((r) => client.once(Events.ClientReady, r));
-  console.log(`Logged in as ${client.user!.tag}`);
+  await ready;
+  const application = await client.application!.fetch();
+  if (!ownerId) {
+    // A team-owned application reports the team, whose owner is the one we want
+    const owner = application.owner;
+    ownerId = (owner && "ownerId" in owner ? owner.ownerId : owner?.id) ?? "";
+    if (!ownerId)
+      throw new Error("Couldn't find the application's owner, set owner in pukeko.toml");
+  }
+  await application.commands.set(commands);
+  console.log(`Logged in as ${client.user!.tag}, answering to ${ownerId}`);
 }

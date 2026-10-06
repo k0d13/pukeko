@@ -1,0 +1,21 @@
+# Pukeko config. Secrets go in .env, which the agent can't read
+# Everything here is optional; the commented values are the defaults
+
+# Discord user ID Pukeko answers to. Defaults to whoever owns the bot's Discord application
+# owner = "123456789012345678"
+
+# Used for job schedules and the time the agent sees. Defaults to the system timezone
+# timezone = "Pacific/Auckland"
+
+[agent]
+# opus, sonnet, or a full model ID. Defaults to Claude Code's default
+# model = "opus"
+
+# Run the agent's shell in an OS sandbox (needs bubblewrap + socat on Linux)
+# This is what actually stops `cat .env`; without it only the Read tool is blocked
+# sandbox = true
+
+[conversations]
+# "channel": each Discord channel, DM and thread is its own conversation, and they run in parallel
+# "shared":  one conversation everywhere, one message at a time
+# scope = "channel"

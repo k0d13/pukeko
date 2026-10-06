@@ -1,0 +1,26 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # macOS so the darwin binaries can be ad-hoc signed, which Apple Silicon requires
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bunx tsc --noEmit
+      - run: |
+          for target in linux-arm64 linux-x64 darwin-arm64 darwin-x64; do
+            bun build src/index.ts --compile --target "bun-$target" --outfile "dist/pukeko-$target"
+          done
+          codesign --force --sign - dist/pukeko-darwin-*
+      - run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

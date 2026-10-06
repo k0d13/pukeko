@@ -9,7 +9,7 @@
     "build:linux-x64": "bun build src/index.ts --compile --target bun-linux-x64 --outfile dist/pukeko-linux-x64",
     "check:format": "oxfmt --check",
     "dev": "bun run --watch src/index.ts --workspace ../workspace",
-    "fmt": "oxfmt",
+    "fix": "oxfmt",
     "start": "bun run src/index.ts --workspace ../workspace",
     "typecheck": "tsc --noEmit"
   },
