@@ -57,17 +57,21 @@ esac
 # Re-running this upgrades, so pick up the new binary if the service is running
 if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet pukeko 2>/dev/null; then
   say "Restarting the pukeko service"
-  systemctl --user restart pukeko
+  "$bin_dir/pukeko" restart
   exit 0
 fi
 
-"$bin_dir/pukeko" init
+# Under `curl | sh` stdin is this script, so init's prompts read the terminal instead
+if : </dev/tty 2>/dev/null; then
+  "$bin_dir/pukeko" init </dev/tty
+else
+  "$bin_dir/pukeko" init
+fi
 
 cat <<EOF
 
 Next:
-  1. claude setup-token         and put the token in .env as CLAUDE_CODE_OAUTH_TOKEN
-  2. Add your Discord bot token to .env as DISCORD_TOKEN
-  3. pukeko                     to try it in the foreground
-  4. pukeko service             to keep it running
+  1. Any token you skipped goes in .env (CLAUDE_CODE_OAUTH_TOKEN, DISCORD_TOKEN)
+  2. pukeko                     to try it in the foreground
+  3. pukeko service             to keep it running (pukeko logs, restart, upgrade)
 EOF

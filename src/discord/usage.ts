@@ -1,4 +1,4 @@
-import { type channelSession, planLimits, planLimitsSeen } from "../agent/index.ts";
+import { planLimits, planLimitsSeen, type Session } from "#/agent/index.ts";
 
 type Window = { percent: number; resetsAt: number };
 
@@ -24,8 +24,8 @@ function limit(label: string, { percent, resetsAt }: Window) {
   return [`**${label}**`, `${bar(percent)}${resetsAt ? ` · resets ${relative(resetsAt)}` : ""}`];
 }
 
-// The fun parts of Claude Code's /usage: plan limits, then this conversation
-export async function usageReport(session: ReturnType<typeof channelSession>) {
+/** The fun parts of Claude Code's /usage: plan limits, then this conversation */
+export async function usageReport(session: Session) {
   const { usage, context } = await session.inspect(async (query) => ({
     usage: await query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({
       skipBehaviors: true,

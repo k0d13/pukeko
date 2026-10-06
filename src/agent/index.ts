@@ -1,4 +1,3 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type EffortLevel,
@@ -7,58 +6,24 @@ import {
   query,
   type SDKRateLimitInfo,
 } from "@anthropic-ai/claude-agent-sdk";
-import { config, secrets, workspace } from "../config.ts";
+import { config, secrets } from "#/core/config.ts";
+import { paths } from "#/core/paths.ts";
 import harnessPrompt from "./prompt.md" with { type: "text" };
 
-type Session = ReturnType<typeof createSession>;
+export type Session = ReturnType<typeof createSession>;
 
-// Picked with /new and fixed for the life of a conversation, since switching
-// partway through loses the prompt cache
+/** Picked with /new and fixed for a conversation, since switching partway loses the prompt cache */
 export type Setup = { model: string; effort: EffortLevel | "" };
+type State = Setup & { id: string };
 
-const stateDir = join(workspace, ".pukeko");
-mkdirSync(stateDir, { recursive: true });
-
-// The server's own `claude` rather than the SDK's bundled one, so the binary
-// stays small and Claude Code updates itself
-const claudePath = Bun.which("claude");
-if (!claudePath) throw new Error("`claude` not found on PATH, install Claude Code first");
-
-// Everything except the conversation, the same for every turn
-const baseOptions: Options = {
-  cwd: workspace,
-  pathToClaudeCodeExecutable: claudePath,
-  env: {
-    // Drop anything also in .env, in case Bun auto-loaded it from the cwd
-    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !(key in secrets))),
-    TZ: config.timezone,
-    CLAUDE_CODE_OAUTH_TOKEN: secrets.CLAUDE_CODE_OAUTH_TOKEN,
-  },
-  systemPrompt: { type: "preset", preset: "claude_code", append: harnessPrompt },
-  settingSources: ["project"],
-  // Flag settings outrank the workspace's .claude/settings.json, so the agent
-  // can't edit its way out of these
-  settings: {
-    permissions: {
-      deny: ["./.env", "./.env.*", "./.pukeko/**"].flatMap((p) => [`Read(${p})`, `Edit(${p})`]),
-    },
-  },
-  // The OS sandbox applies the deny rules to Bash too, so `cat .env` fails as well
-  sandbox: config.agent.sandbox
-    ? { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false }
-    : undefined,
-  // Single user, so no approval prompts. Deny rules still apply
-  permissionMode: "bypassPermissions",
-  allowDangerouslySkipPermissions: true,
-};
-
-// ${VAR} in .mcp.json is filled from .env here, so tokens reach MCP servers
-// without ever being in the agent's environment. Read every turn so edits apply
 const warned = new Set<string>();
-function mcpServers() {
-  const path = join(workspace, ".mcp.json");
-  if (!existsSync(path)) return {};
-  const raw = readFileSync(path, "utf8").replace(/\$\{(\w+)\}/g, (_, name: string) => {
+
+// ${VAR} is filled from .env here, so tokens reach MCP servers but never the agent's
+// environment. Read every turn so edits apply
+async function mcpServers() {
+  const file = Bun.file(paths.mcp);
+  if (!(await file.exists())) return {};
+  const raw = (await file.text()).replace(/\$\{(\w+)\}/g, (_, name: string) => {
     if (!(name in secrets) && !warned.has(name)) {
       warned.add(name);
       console.warn(`.mcp.json uses \${${name}} but .env doesn't define it`);
@@ -66,6 +31,39 @@ function mcpServers() {
     return secrets[name] ?? "";
   });
   return JSON.parse(raw).mcpServers ?? {};
+}
+
+async function options(state: State): Promise<Options> {
+  return {
+    cwd: paths.workspace,
+    // The server's own `claude`, so the binary stays small and Claude Code updates itself
+    pathToClaudeCodeExecutable: Bun.which("claude")!,
+    env: {
+      // Drop anything also in .env, in case Bun auto-loaded it from the cwd
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !(key in secrets))),
+      TZ: config.timezone,
+      CLAUDE_CODE_OAUTH_TOKEN: secrets.CLAUDE_CODE_OAUTH_TOKEN,
+    },
+    systemPrompt: { type: "preset", preset: "claude_code", append: harnessPrompt },
+    settingSources: ["project"],
+    // Flag settings outrank the workspace's own, so the agent can't edit its way out
+    settings: {
+      permissions: {
+        deny: ["./.env", "./.env.*", "./.pukeko/**"].flatMap((p) => [`Read(${p})`, `Edit(${p})`]),
+      },
+    },
+    // The OS sandbox applies the deny rules to Bash too
+    sandbox: config.agent.sandbox
+      ? { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false }
+      : undefined,
+    // Single user, so no approval prompts. Deny rules still apply
+    permissionMode: "bypassPermissions",
+    allowDangerouslySkipPermissions: true,
+    model: state.model || undefined,
+    effort: state.effort || undefined,
+    resume: state.id || undefined,
+    mcpServers: await mcpServers(),
+  };
 }
 
 function now() {
@@ -76,8 +74,7 @@ function now() {
   });
 }
 
-// Plan usage as of the latest turn, from the rate limit headers Claude Code
-// passes on. Unlike the usage endpoint this works with `claude setup-token` logins
+/** Plan usage from the last turn's rate limit headers, which `claude setup-token` logins also get */
 export const planLimits = new Map<string, { percent: number; resetsAt: number }>();
 export let planLimitsSeen: Date | undefined;
 
@@ -93,39 +90,25 @@ function recordLimits(info: SDKRateLimitInfo) {
   planLimitsSeen = new Date();
 }
 
-// A prompt that never sends, so control requests can run against a
-// conversation without starting a turn
+// Never sends, so control requests can run without starting a turn
 async function* idle(): AsyncGenerator<never> {
   await new Promise(() => {});
 }
 
-// One Claude Code conversation. Turns queue up and run one at a time. With a
-// `name` it's saved in .pukeko/ so it resumes across restarts
-function createSession(name?: string) {
-  const file = name && join(stateDir, `${name}.json`);
-  let state: Setup & { id: string } = {
-    model: config.agent.model,
-    effort: config.agent.effort,
-    id: "",
-    ...(file && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {}),
-  };
+/** One conversation, running turns one at a time. With a `file` it resumes across restarts */
+export function createSession(file?: string, saved?: Partial<State>) {
+  let state: State = { model: config.agent.model, effort: config.agent.effort, id: "", ...saved };
   let current: AbortController | undefined;
   let queue = Promise.resolve();
   // Bumped by restart() so a turn already in flight can't save its ID afterwards
   let generation = 0;
+  // Chained so an older state never lands after a newer one
+  let saving = Promise.resolve();
 
   function save() {
-    if (file) writeFileSync(file, JSON.stringify(state));
-  }
-
-  function options(): Options {
-    return {
-      ...baseOptions,
-      model: state.model || undefined,
-      effort: state.effort || undefined,
-      resume: state.id || undefined,
-      mcpServers: mcpServers(),
-    };
+    if (!file) return;
+    const json = JSON.stringify(state);
+    saving = saving.then(() => Bun.write(file, json)).then(() => {}, console.error);
   }
 
   function restart(setup: Partial<Setup> = {}) {
@@ -143,7 +126,7 @@ function createSession(name?: string) {
     try {
       for await (const message of query({
         prompt,
-        options: { ...options(), abortController: abort },
+        options: { ...(await options(state)), abortController: abort },
       })) {
         if (message.type === "system" && message.subtype === "init") {
           started = true;
@@ -188,28 +171,26 @@ function createSession(name?: string) {
     ask(text: string) {
       return enqueue(`${text}\n\n[Current time: ${now()}]`);
     },
-    // Claude Code's own /compact, summarising the conversation so far
     async compact() {
       if (!state.id) return "Nothing to compact yet";
       const reply = await enqueue("/compact");
       return reply.startsWith("⚠️") || reply.startsWith("⏹️") ? reply : "🗜️ Conversation compacted";
     },
-    // Runs `fn` against this conversation without sending anything to Claude
+    /** Runs `fn` against this conversation without sending anything to Claude */
     async inspect<T>(fn: (query: Query) => Promise<T>) {
-      const q = query({ prompt: idle(), options: options() });
+      const q = query({ prompt: idle(), options: await options(state) });
       try {
         return await fn(q);
       } finally {
         q.close();
       }
     },
-    // Whether there was a turn to stop
+    /** Whether there was a turn to stop */
     stop() {
       current?.abort();
       return current !== undefined;
     },
-    // Ends the conversation. Fields in `setup` change the next one's model or
-    // effort, the rest carry over
+    /** Ends the conversation. `setup` changes the next one's model or effort */
     reset(setup: Partial<Setup> = {}) {
       current?.abort();
       restart(setup);
@@ -217,16 +198,21 @@ function createSession(name?: string) {
   };
 }
 
-// conversations.scope "channel" gives each channel its own conversation, run in
-// parallel; "shared" uses one everywhere
-const sessions = new Map<string, Session>();
+const sessions = new Map<string, Promise<Session>>();
+
+/** Per channel, run in parallel, or one shared, per `conversations.scope` */
 export function channelSession(channelId: string) {
   const name = config.conversations.scope === "shared" ? "shared" : `channel-${channelId}`;
   let session = sessions.get(name);
-  if (!session) sessions.set(name, (session = createSession(name)));
+  if (!session) {
+    const file = join(paths.state, `${name}.json`);
+    session = Bun.file(file)
+      .json()
+      .catch((error) => {
+        if (error?.code !== "ENOENT") console.warn(`Couldn't read ${file}, starting fresh`, error);
+      })
+      .then((saved: Partial<State> | undefined) => createSession(file, saved));
+    sessions.set(name, session);
+  }
   return session;
 }
-
-// Scheduled jobs share one conversation, kept out of the chat ones and
-// forgotten on restart
-export const jobSession = createSession();

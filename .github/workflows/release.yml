@@ -18,7 +18,8 @@ jobs:
       - run: bunx tsc --noEmit
       - run: |
           for target in linux-arm64 linux-x64 darwin-arm64 darwin-x64; do
-            bun build src/index.ts --compile --target "bun-$target" --outfile "dist/pukeko-$target"
+            bun build src/cli/index.ts --compile --minify --target "bun-$target" --outfile "dist/pukeko-$target" \
+              --define "PUKEKO_RELEASE=\"$GITHUB_REF_NAME\""
           done
           codesign --force --sign - dist/pukeko-darwin-*
       - run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes

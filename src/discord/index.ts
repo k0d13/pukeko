@@ -11,12 +11,11 @@ import {
   type ChatInputCommandInteraction,
   type Interaction,
 } from "discord.js";
-import { channelSession } from "../agent/index.ts";
-import { config, effortLevels, secrets } from "../config.ts";
+import { channelSession, type Session } from "#/agent/index.ts";
+import { config, effortLevels, secrets } from "#/core/config.ts";
 import { usageReport } from "./usage.ts";
 
-// pukeko.toml `owner`, or else whoever owns the Discord application, found at startup
-let ownerId = config.owner;
+let ownerId = "";
 
 const client = new Client({
   intents: [
@@ -68,7 +67,7 @@ const commands = [
     .toJSON(),
 );
 
-// Splits on newlines where possible to stay under Discord's 2000 character limit
+// Under Discord's 2000 character limit, split on newlines where possible
 function chunks(text: string) {
   const out: string[] = [];
   let rest = text.trim() || "(no reply)";
@@ -82,7 +81,6 @@ function chunks(text: string) {
   return out;
 }
 
-// Sends the first chunk one way (a reply) and the rest another (plain messages)
 async function deliver(
   text: string,
   first: (chunk: string) => Promise<unknown>,
@@ -93,7 +91,7 @@ async function deliver(
   for (const chunk of tail) await rest(chunk);
 }
 
-// Posts to a channel, or to the owner's DMs without one
+/** Posts to a channel, or to the owner's DMs without one */
 export async function send(channelId: string | undefined, text: string) {
   const channel = channelId
     ? await client.channels.fetch(channelId)
@@ -106,7 +104,6 @@ export async function send(channelId: string | undefined, text: string) {
   );
 }
 
-// The prompt for a message: where it came from, what it replies to, and attachments
 async function describe(message: Message) {
   const where =
     message.channel.type === ChannelType.DM
@@ -130,7 +127,8 @@ async function handleMessage(message: Message) {
   typing();
   const interval = setInterval(typing, 8000);
   try {
-    const reply = await channelSession(message.channelId).ask(await describe(message));
+    const session = await channelSession(message.channelId);
+    const reply = await session.ask(await describe(message));
     await deliver(
       reply,
       (c) => message.reply(c),
@@ -141,12 +139,10 @@ async function handleMessage(message: Message) {
   }
 }
 
-async function handleAsk(interaction: ChatInputCommandInteraction) {
+async function handleAsk(interaction: ChatInputCommandInteraction, session: Session) {
   await interaction.deferReply();
   const prompt = interaction.options.getString("prompt", true);
-  const reply = await channelSession(interaction.channelId).ask(
-    `[Discord /ask from owner]\n${prompt}`,
-  );
+  const reply = await session.ask(`[Discord /ask from owner]\n${prompt}`);
   const text = `> ${prompt}\n\n${reply}`;
   try {
     await deliver(
@@ -160,8 +156,7 @@ async function handleAsk(interaction: ChatInputCommandInteraction) {
   }
 }
 
-async function handleNew(interaction: ChatInputCommandInteraction) {
-  const session = channelSession(interaction.channelId);
+async function handleNew(interaction: ChatInputCommandInteraction, session: Session) {
   const model = interaction.options.getString("model");
   const effort = interaction.options.getString("effort") as
     | (typeof effortLevels)[number]
@@ -193,12 +188,12 @@ async function handleInteraction(interaction: Interaction) {
   if (interaction.user.id !== ownerId)
     return interaction.reply({ content: "Not yours 🐦", flags: MessageFlags.Ephemeral });
 
-  const session = channelSession(interaction.channelId);
+  const session = await channelSession(interaction.channelId);
   switch (interaction.commandName) {
     case "ask":
-      return handleAsk(interaction);
+      return handleAsk(interaction, session);
     case "new":
-      return handleNew(interaction);
+      return handleNew(interaction, session);
     case "stop":
       return interaction.reply(session.stop() ? "⏹️ Stopping" : "Nothing running");
     case "compact":
@@ -222,13 +217,10 @@ export async function startDiscord() {
   await client.login(secrets.DISCORD_TOKEN);
   await ready;
   const application = await client.application!.fetch();
-  if (!ownerId) {
-    // A team-owned application reports the team, whose owner is the one we want
-    const owner = application.owner;
-    ownerId = (owner && "ownerId" in owner ? owner.ownerId : owner?.id) ?? "";
-    if (!ownerId)
-      throw new Error("Couldn't find the application's owner, set owner in pukeko.toml");
-  }
+  // A team-owned application reports the team, whose owner is the one we want
+  const owner = application.owner;
+  ownerId = config.owner || ((owner && "ownerId" in owner ? owner.ownerId : owner?.id) ?? "");
+  if (!ownerId) throw new Error("Couldn't find the application's owner, set owner in pukeko.toml");
   await application.commands.set(commands);
   console.log(`Logged in as ${client.user!.tag}, answering to ${ownerId}`);
 }
