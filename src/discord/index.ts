@@ -1,66 +1,13 @@
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
-import {
-  ChannelType,
-  Client,
-  Events,
-  GatewayIntentBits,
-  InteractionContextType,
-  type Message,
-  MessageFlags,
-  Partials,
-  SlashCommandBuilder,
-  type ChatInputCommandInteraction,
-  type Interaction,
-} from "discord.js";
-import { channelSession, type Session } from "#/agent/index.ts";
-import { config, effortLevels, secrets } from "#/core/config.ts";
-import { paths } from "#/core/paths.ts";
-import { usageReport } from "./usage.ts";
+import { Events, InteractionContextType, MessageFlags, type Interaction } from "discord.js";
+import { channelSession } from "#/agent/index.ts";
+import { config, secrets } from "#/core/config.ts";
+import * as ask from "./ask.ts";
+import { client, owner } from "./client.ts";
+import * as conversation from "./conversation.ts";
 
-let ownerId = "";
+export { send } from "./client.ts";
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.DirectMessages,
-    GatewayIntentBits.MessageContent,
-  ],
-  partials: [Partials.Channel],
-});
-
-const commands = [
-  new SlashCommandBuilder()
-    .setName("ask")
-    .setDescription("Ask Pukeko something")
-    .addStringOption((o) => o.setName("prompt").setDescription("What to ask").setRequired(true)),
-  new SlashCommandBuilder()
-    .setName("new")
-    .setDescription("Start a fresh conversation here, optionally with another model or effort")
-    .addStringOption((o) =>
-      o
-        .setName("model")
-        .setDescription("Opus, Sonnet, Haiku or a full model ID, kept until changed")
-        .setAutocomplete(true),
-    )
-    .addStringOption((o) =>
-      o
-        .setName("effort")
-        .setDescription("How hard the model thinks, kept until changed")
-        .addChoices(
-          { name: "default", value: "default" },
-          ...effortLevels.map((level) => ({ name: level, value: level })),
-        ),
-    ),
-  new SlashCommandBuilder().setName("stop").setDescription("Stop the current turn here"),
-  new SlashCommandBuilder()
-    .setName("compact")
-    .setDescription("Summarise this conversation to free up context"),
-  new SlashCommandBuilder()
-    .setName("usage")
-    .setDescription("Plan limits and this conversation's usage"),
-].map((command) =>
+const commands = [...ask.commands, ...conversation.commands].map((command) =>
   command
     .setContexts(
       InteractionContextType.Guild,
@@ -70,171 +17,21 @@ const commands = [
     .toJSON(),
 );
 
-// Under Discord's 2000 character limit, split on newlines where possible
-function chunks(text: string) {
-  const out: string[] = [];
-  let rest = text.trim() || "(no reply)";
-  while (rest.length > 1900) {
-    let cut = rest.lastIndexOf("\n", 1900);
-    if (cut < 1000) cut = 1900;
-    out.push(rest.slice(0, cut));
-    rest = rest.slice(cut).trimStart();
-  }
-  out.push(rest);
-  return out;
-}
-
-type Payload = { content: string; files?: string[] };
-
-// The agent attaches files with a line of `[attach: path]`, relative to the workspace
-// Discord takes up to 10 per message
-function attachments(text: string) {
-  const files: string[] = [];
-  const missing: string[] = [];
-  const rest = text.replace(/^[ \t]*\[attach:\s*(.+?)\s*\][ \t]*$\n?/gim, (_, path: string) => {
-    const file = resolve(paths.workspace, path);
-    if (existsSync(file) && files.length < 10) files.push(file);
-    else missing.push(path);
-    return "";
-  });
-  const note = missing.length ? `\n-# Couldn't attach ${missing.join(", ")}` : "";
-  return { text: rest + note, files };
-}
-
-async function deliver(
-  reply: string,
-  first: (payload: Payload) => Promise<unknown>,
-  rest: (payload: Payload) => Promise<unknown>,
-) {
-  const { text, files } = attachments(reply);
-  // An image on its own needs no "(no reply)" above it
-  const parts =
-    files.length && !text.trim()
-      ? [{ content: "" } as Payload]
-      : chunks(text).map((content): Payload => ({ content }));
-  // Files go with the last chunk, so they land under the whole reply
-  if (files.length) parts.at(-1)!.files = files;
-  const [head, ...tail] = parts;
-  await first(head!);
-  for (const part of tail) await rest(part);
-}
-
-/** Posts to a channel, or to the owner's DMs without one */
-export async function send(channelId: string | undefined, text: string) {
-  const channel = channelId
-    ? await client.channels.fetch(channelId)
-    : await (await client.users.fetch(ownerId)).createDM();
-  if (!channel?.isSendable()) throw new Error(`Can't send to channel ${channelId}`);
-  await deliver(
-    text,
-    (c) => channel.send(c),
-    (c) => channel.send(c),
-  );
-}
-
-async function describe(message: Message) {
-  const where =
-    message.channel.type === ChannelType.DM
-      ? "DM"
-      : `#${"name" in message.channel ? message.channel.name : message.channelId}`;
-  let text = message.content.replaceAll(new RegExp(`<@!?${client.user!.id}>`, "g"), "").trim();
-  for (const a of message.attachments.values()) text += `\n[Attachment: ${a.name} ${a.url}]`;
-  const ref = message.reference?.messageId && (await message.fetchReference().catch(() => null));
-  if (ref) text = `[Replying to ${ref.author.username}: ${ref.content}]\n\n${text}`;
-  return `[Discord message from owner in ${where}]\n${text}`;
-}
-
-async function handleMessage(message: Message) {
-  if (message.author.id !== ownerId) return;
-  if (message.channel.type !== ChannelType.DM && !message.mentions.users.has(client.user!.id))
-    return;
-  if (!message.channel.isSendable()) return;
-
-  const channel = message.channel;
-  const typing = () => channel.sendTyping().catch(() => {});
-  typing();
-  const interval = setInterval(typing, 8000);
-  try {
-    const session = await channelSession(message.channelId);
-    const reply = await session.ask(await describe(message));
-    await deliver(
-      reply,
-      (c) => message.reply(c),
-      (c) => channel.send(c),
-    );
-  } finally {
-    clearInterval(interval);
-  }
-}
-
-async function handleAsk(interaction: ChatInputCommandInteraction, session: Session) {
-  await interaction.deferReply();
-  const prompt = interaction.options.getString("prompt", true);
-  const reply = await session.ask(`[Discord /ask from owner]\n${prompt}`);
-  const text = `> ${prompt}\n\n${reply}`;
-  try {
-    await deliver(
-      text,
-      (c) => interaction.editReply(c),
-      (c) => interaction.followUp(c),
-    );
-  } catch {
-    // Interaction tokens expire after 15 minutes, so long turns post to the channel
-    await send(interaction.channelId, text);
-  }
-}
-
-async function handleNew(interaction: ChatInputCommandInteraction, session: Session) {
-  const model = interaction.options.getString("model");
-  const effort = interaction.options.getString("effort") as
-    | (typeof effortLevels)[number]
-    | "default"
-    | null;
-  // "default" goes back to pukeko.toml, unset keeps the current choice
-  session.reset({
-    ...(model && { model: model === "default" ? config.agent.model : model }),
-    ...(effort && { effort: effort === "default" ? config.agent.effort : effort }),
-  });
-  const setup = session.setup;
-  const details = [setup.model, setup.effort && `${setup.effort} effort`].filter(Boolean);
-  return interaction.reply(
-    `🆕 Fresh conversation started${details.length ? ` (${details.join(", ")})` : ""}`,
-  );
-}
-
-// Model aliases Claude Code understands, plus whatever's been typed
-const modelChoices = ["default", "opus", "sonnet", "haiku"];
+const askNames = new Set(ask.commands.map((command) => command.name));
 
 async function handleInteraction(interaction: Interaction) {
-  if (interaction.isAutocomplete()) {
-    const typed = interaction.options.getFocused().trim();
-    const choices = modelChoices.filter((name) => name.startsWith(typed.toLowerCase()));
-    if (typed && !choices.includes(typed)) choices.push(typed);
-    return interaction.respond(choices.map((name) => ({ name, value: name })));
-  }
-  if (!interaction.isChatInputCommand()) return;
-  if (interaction.user.id !== ownerId)
+  if (interaction.isAutocomplete()) return conversation.autocomplete(interaction);
+  if (!interaction.isChatInputCommand() && !interaction.isMessageContextMenuCommand()) return;
+  if (interaction.user.id !== owner.id)
     return interaction.reply({ content: "Not yours 🐦", flags: MessageFlags.Ephemeral });
 
   const session = await channelSession(interaction.channelId);
-  switch (interaction.commandName) {
-    case "ask":
-      return handleAsk(interaction, session);
-    case "new":
-      return handleNew(interaction, session);
-    case "stop":
-      return interaction.reply(session.stop() ? "⏹️ Stopping" : "Nothing running");
-    case "compact":
-      await interaction.deferReply();
-      return interaction.editReply(await session.compact());
-    case "usage":
-      await interaction.deferReply();
-      return interaction.editReply(await usageReport(session));
-  }
+  if (askNames.has(interaction.commandName)) return ask.handle(interaction, session);
+  if (interaction.isChatInputCommand()) return conversation.handle(interaction, session);
 }
 
 client.on(Events.MessageCreate, (message) => {
-  handleMessage(message).catch(console.error);
+  ask.handleMessage(message).catch(console.error);
 });
 client.on(Events.InteractionCreate, (interaction) => {
   handleInteraction(interaction).catch(console.error);
@@ -246,9 +43,10 @@ export async function startDiscord() {
   await ready;
   const application = await client.application!.fetch();
   // A team-owned application reports the team, whose owner is the one we want
-  const owner = application.owner;
-  ownerId = config.owner || ((owner && "ownerId" in owner ? owner.ownerId : owner?.id) ?? "");
-  if (!ownerId) throw new Error("Couldn't find the application's owner, set owner in pukeko.toml");
+  const appOwner = application.owner;
+  owner.id =
+    config.owner || ((appOwner && "ownerId" in appOwner ? appOwner.ownerId : appOwner?.id) ?? "");
+  if (!owner.id) throw new Error("Couldn't find the application's owner, set owner in pukeko.toml");
   await application.commands.set(commands);
-  console.log(`Logged in as ${client.user!.tag}, answering to ${ownerId}`);
+  console.log(`Logged in as ${client.user!.tag}, answering to ${owner.id}`);
 }
