@@ -29,15 +29,9 @@
 # owner = "123456789012345678"
 
 # [github]
-# Lets the owner talk to Pukeko by mentioning it on GitHub ("@pukeko fix this" on a PR or issue)
-# Pukeko listens for GitHub webhooks, which need to reach it from the internet (a tunnel works)
-# Needs the webhook's secret as GITHUB_WEBHOOK_SECRET in .env. Subscribe the webhook (content type
-# application/json) to issue comments, pull request review comments, pull request reviews,
-# issues and pull requests
-# port = 8787
-
-# Pukeko's GitHub username, which mentions are looked for
-# bot = "pukeko"
-
+# Lets the owner talk to Pukeko by mentioning its GitHub account ("@pukeko fix this") on any issue,
+# PR or comment, in any repo the account can see. Pukeko watches the account's notifications,
+# which costs no Claude usage until there's a mention
+# Needs GITHUB_TOKEN in .env: a classic token with the notifications and repo scopes
 # The only GitHub user whose mentions are acted on. Everyone else's are ignored
 # owner = "octocat"

@@ -13,6 +13,6 @@ export default defineCommand({
     console.log(`Pukeko ${version} starting with workspace ${paths.workspace}`);
     if (integrations.discord) await startDiscord();
     await startJobs();
-    if (integrations.github) startGithub();
+    if (integrations.github) await startGithub();
   },
 });

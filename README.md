@@ -14,7 +14,7 @@ the basics from `templates/`; personality, integrations and jobs are yours to ad
   Blocks reading `.pukeko/` through settings the workspace can't override, plus an OS sandbox for Bash.
 - `src/integrations/`: one folder or file per integration, each on when its table (`[discord]`, `[github]`) is in `pukeko.toml`. With none, only jobs run, and their replies are saved to `.pukeko/replies/`.
 - `src/integrations/discord/`: replies to the owner (`discord.owner` in `pukeko.toml`, or the Discord application owner) in DMs, on @mention, and via `/ask`, `/new` (optionally switching model or effort), `/stop`, `/compact` and `/usage`.
-- `src/integrations/github.ts`: optional `[github]` webhook listener. When the owner mentions the bot on an issue or PR, it becomes a prompt in its own conversation, and the agent answers on GitHub itself. Requests are checked against `GITHUB_WEBHOOK_SECRET`, and mentions from anyone but `github.owner` are ignored.
+- `src/integrations/github.ts`: optional `[github]` watcher. It polls the token account's notifications (conditional requests, so quiet checks are free), and when `github.owner` mentions the account anywhere, that becomes a prompt in its own conversation. The agent answers on GitHub itself. Mentions from anyone else are ignored.
 - `src/jobs.ts`: runs `jobs/<id>/job.md` on cron or one-off schedules; rescans every minute.
 - `src/agent/prompt*.md`: the harness rules appended to Claude Code's system prompt: `prompt.md` always, plus one per enabled integration.
 

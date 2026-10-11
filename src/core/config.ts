@@ -12,7 +12,7 @@ const defaults = {
   conversations: { scope: "channel" as "channel" | "shared" },
   // Integrations are on when their table is in pukeko.toml, see `integrations`
   discord: { owner: "" },
-  github: { port: 8787, bot: "", owner: "" },
+  github: { owner: "" },
 };
 
 /** Filled by `loadConfig` */
@@ -82,15 +82,9 @@ export async function loadConfig() {
     errors.push(`"timezone" "${config.timezone}" isn't a known timezone`);
   }
   if (integrations.github) {
-    const { port, bot, owner } = config.github;
-    if (!Number.isInteger(port) || port < 1 || port > 65535)
-      errors.push(`"github.port" should be a port number (1-65535)`);
-    for (const [key, login] of [
-      ["bot", bot],
-      ["owner", owner],
-    ] as const)
-      if (!/^[a-z\d-]+$/i.test(login)) errors.push(`"github.${key}" should be a GitHub username`);
-    if (!secrets.GITHUB_WEBHOOK_SECRET) errors.push("GITHUB_WEBHOOK_SECRET is missing from .env");
+    if (!/^[a-z\d-]+$/i.test(config.github.owner))
+      errors.push(`"github.owner" should be a GitHub username`);
+    if (!secrets.GITHUB_TOKEN) errors.push("GITHUB_TOKEN is missing from .env");
   }
   if (!secrets.CLAUDE_CODE_OAUTH_TOKEN) errors.push("CLAUDE_CODE_OAUTH_TOKEN is missing from .env");
   if (!Bun.which("claude")) errors.push("`claude` isn't on PATH, install Claude Code first");

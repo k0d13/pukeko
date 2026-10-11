@@ -1,97 +1,114 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
 import { createSession, type Session } from "#/agent/index.ts";
 import { config, secrets } from "#/core/config.ts";
 import { saveReply } from "#/core/replies.ts";
 
-type Payload = Record<string, any>;
-type Mention = { where: string; url: string; text: string };
+type Notification = {
+  id: string;
+  reason: string;
+  updated_at: string;
+  last_read_at: string | null;
+  subject: { title: string; type: string; url: string; latest_comment_url: string | null };
+  repository: { full_name: string };
+};
+// What issues, PRs, comments and reviews have in common
+type Item = { html_url: string; body?: string | null; user?: { login: string } | null };
 
-// Shared by every webhook, kept out of the chats and forgotten on restart
+const api = "https://api.github.com";
+
+// Shared by every mention, kept out of the chats and forgotten on restart
 let session: Session;
+let lastModified: string | undefined;
+// Comments already answered, in case GitHub lists a thread again
+const answered = new Set<string>();
 
-function validSignature(body: string, header: string | null) {
-  const expected = `sha256=${createHmac("sha256", secrets.GITHUB_WEBHOOK_SECRET!).update(body).digest("hex")}`;
-  const a = Buffer.from(expected);
-  const b = Buffer.from(header ?? "");
-  return a.length === b.length && timingSafeEqual(a, b);
+function github(path: string, init: RequestInit = {}) {
+  return fetch(path.startsWith("http") ? path : api + path, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${secrets.GITHUB_TOKEN}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      ...init.headers,
+    },
+  });
 }
 
-/** Pulls the text and location out of the events that can carry a mention, or undefined for the rest */
-function extract(event: string, p: Payload): Mention | undefined {
-  const repo = p.repository?.full_name;
-  switch (`${event}.${p.action}`) {
-    case "issue_comment.created": {
-      const kind = p.issue.pull_request ? "PR" : "issue";
-      return {
-        where: `${repo} ${kind} #${p.issue.number}: ${p.issue.title}`,
-        url: p.comment.html_url,
-        text: p.comment.body,
-      };
-    }
-    case "pull_request_review_comment.created":
-      return {
-        where: `${repo} PR #${p.pull_request.number}: ${p.pull_request.title} (${p.comment.path})`,
-        url: p.comment.html_url,
-        text: p.comment.body,
-      };
-    case "pull_request_review.submitted":
-      return {
-        where: `${repo} PR #${p.pull_request.number}: ${p.pull_request.title}`,
-        url: p.review.html_url,
-        text: p.review.body,
-      };
-    case "issues.opened":
-      return {
-        where: `${repo} issue #${p.issue.number}: ${p.issue.title}`,
-        url: p.issue.html_url,
-        text: p.issue.body,
-      };
-    case "pull_request.opened":
-      return {
-        where: `${repo} PR #${p.pull_request.number}: ${p.pull_request.title}`,
-        url: p.pull_request.html_url,
-        text: p.pull_request.body,
-      };
+async function json<T>(path: string): Promise<T | undefined> {
+  const response = await github(path);
+  if (response.ok) return response.json() as Promise<T>;
+  console.warn(`GitHub ${path} returned ${response.status}`);
+}
+
+/**
+ * Everything in a notification's thread that could be the mention: its latest comment, and any
+ * comments since it was last read
+ */
+async function candidates(n: Notification) {
+  const { url, latest_comment_url: latest, type } = n.subject;
+  const since = n.last_read_at ?? n.updated_at;
+  const found = [await json<Item>(latest ?? url)];
+  if (type === "Issue" || type === "PullRequest")
+    found.push(
+      ...((await json<Item[]>(`${url.replace("/pulls/", "/issues/")}/comments?since=${since}`)) ??
+        []),
+    );
+  if (type === "PullRequest")
+    found.push(...((await json<Item[]>(`${url}/comments?since=${since}`)) ?? []));
+  return found.filter((item) => item !== undefined);
+}
+
+async function handle(n: Notification, login: string) {
+  const owner = config.github.owner.toLowerCase();
+  const mention = new RegExp(`(?<![\\w/])@${login}(?![\\w-])`, "i");
+  // Marked read first so a turn that fails can't come back round every minute
+  await github(`/notifications/threads/${n.id}`, { method: "PATCH" });
+
+  for (const item of await candidates(n)) {
+    if (!item.body || answered.has(item.html_url) || !mention.test(item.body)) continue;
+    answered.add(item.html_url);
+    // Anyone can mention an account on a public repo, but only the owner gets to give orders
+    const sender = item.user?.login ?? "";
+    if (sender.toLowerCase() !== owner)
+      return void console.warn(`Ignoring a GitHub mention from ${sender} at ${item.html_url}`);
+
+    console.log(`GitHub mention from ${sender} at ${item.html_url}`);
+    const where = `${n.repository.full_name} ${n.subject.type}: ${n.subject.title}`;
+    const reply = await session.ask(
+      `[GitHub mention from ${sender} in ${where}]\n${item.html_url}\n\n${item.body}`,
+    );
+    // The agent answers on GitHub itself, so this is only kept in case the owner wants to look
+    await saveReply("github", reply);
   }
 }
 
-async function handle(event: string, payload: Payload) {
-  const mention = extract(event, payload);
-  const bot = config.github.bot;
-  const sender: string = payload.sender?.login ?? "";
-  if (!mention?.text) return;
-  // Logins are letters, digits and hyphens (checked at startup), so "@bot-two" is somebody else
-  if (!new RegExp(`(?<![\\w/])@${bot}(?![\\w-])`, "i").test(mention.text)) return;
-  // Anyone can comment on a public repo, but only the owner gets to give orders
-  if (sender.toLowerCase() !== config.github.owner.toLowerCase())
-    return void console.warn(`Ignoring a GitHub mention from ${sender} at ${mention.url}`);
-
-  console.log(`GitHub mention from ${sender} at ${mention.url}`);
-  const reply = await session.ask(
-    `[GitHub mention from ${sender} in ${mention.where}]\n${mention.url}\n\n${mention.text}`,
-  );
-  // The agent answers on GitHub itself, so this is only kept in case the owner wants to look
-  await saveReply("github", reply);
+async function poll(login: string) {
+  let wait = 60;
+  try {
+    const response = await github("/notifications?participating=true", {
+      headers: lastModified ? { "If-Modified-Since": lastModified } : {},
+    });
+    wait = Number(response.headers.get("x-poll-interval")) || wait;
+    if (response.status === 200) {
+      lastModified = response.headers.get("last-modified") ?? undefined;
+      for (const n of (await response.json()) as Notification[])
+        if (n.reason === "mention") await handle(n, login).catch(console.error);
+    } else if (response.status !== 304) {
+      console.warn(`GitHub notifications returned ${response.status}`);
+    }
+  } catch (error) {
+    console.error("GitHub notifications poll failed", error);
+  }
+  setTimeout(() => poll(login), wait * 1000);
 }
 
-export function startGithub() {
-  const { port } = config.github;
+/**
+ * Mentions of the token's account anywhere on GitHub show up in its notifications, which cost
+ * nothing to check until there's one
+ */
+export async function startGithub() {
+  const user = await json<{ login: string }>("/user");
+  if (!user) throw new Error("GITHUB_TOKEN doesn't work, GitHub rejected it");
   session = createSession();
-  Bun.serve({
-    port,
-    async fetch(request) {
-      if (request.method !== "POST") return new Response("Not found", { status: 404 });
-      const body = await request.text();
-      if (!validSignature(body, request.headers.get("x-hub-signature-256")))
-        return new Response("Bad signature", { status: 401 });
-      const event = request.headers.get("x-github-event") ?? "";
-      // Answer GitHub straight away, it gives up on slow hooks. The session queues the turns
-      if (event !== "ping")
-        handle(event, JSON.parse(body)).catch((error) =>
-          console.error(`GitHub ${event} webhook failed`, error),
-        );
-      return new Response("ok");
-    },
-  });
-  console.log(`Listening for GitHub webhooks on port ${port}`);
+  console.log(`Watching GitHub for @${user.login} mentions from ${config.github.owner}`);
+  await poll(user.login);
 }
