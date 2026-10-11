@@ -1,9 +1,6 @@
 # Pukeko config. Secrets go in .env
 # Everything here is optional; the commented values are the defaults
 
-# Discord user ID Pukeko answers to. Defaults to whoever owns the bot's Discord application
-# owner = "123456789012345678"
-
 # Used for job schedules and the time the agent sees. Defaults to the system timezone
 # timezone = "Pacific/Auckland"
 
@@ -24,12 +21,19 @@
 # "shared":  one conversation everywhere, one message at a time
 # scope = "channel"
 
-[github]
+# Integrations are on when their table is here. Delete or comment out the ones you don't want
+
+[discord]
+# Discord user ID Pukeko answers to. Defaults to whoever owns the bot's Discord application
+# Needs DISCORD_TOKEN in .env
+# owner = "123456789012345678"
+
+# [github]
 # Lets the owner talk to Pukeko by mentioning it on GitHub ("@pukeko fix this" on a PR or issue)
-# Pukeko listens for GitHub webhooks on this port. 0 turns it off. It needs to be reachable from
-# the internet (a tunnel works), with the webhook's secret as GITHUB_WEBHOOK_SECRET in .env
-# Subscribe the webhook (content type application/json) to issue comments, pull request review
-# comments, pull request reviews, issues and pull requests
+# Pukeko listens for GitHub webhooks, which need to reach it from the internet (a tunnel works)
+# Needs the webhook's secret as GITHUB_WEBHOOK_SECRET in .env. Subscribe the webhook (content type
+# application/json) to issue comments, pull request review comments, pull request reviews,
+# issues and pull requests
 # port = 8787
 
 # Pukeko's GitHub username, which mentions are looked for

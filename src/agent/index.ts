@@ -6,11 +6,17 @@ import {
   query,
   type SDKRateLimitInfo,
 } from "@anthropic-ai/claude-agent-sdk";
-import { config, secrets } from "#/core/config.ts";
+import { config, integrations, secrets } from "#/core/config.ts";
 import { paths } from "#/core/paths.ts";
-import harnessPrompt from "./prompt.md" with { type: "text" };
+import discord from "./prompt-discord.md" with { type: "text" };
+import github from "./prompt-github.md" with { type: "text" };
+import core from "./prompt.md" with { type: "text" };
 
 export type Session = ReturnType<typeof createSession>;
+
+// Only the integrations that are on, so the agent isn't told about ones it can't use
+const harnessPrompt = () =>
+  [core, integrations.discord && discord, integrations.github && github].filter(Boolean).join("\n");
 
 /** Picked with /new and fixed for a conversation, since switching partway loses the prompt cache */
 export type Setup = { model: string; effort: EffortLevel | "" };
@@ -44,7 +50,7 @@ async function options(state: State): Promise<Options> {
       TZ: config.timezone,
       CLAUDE_CODE_OAUTH_TOKEN: secrets.CLAUDE_CODE_OAUTH_TOKEN,
     },
-    systemPrompt: { type: "preset", preset: "claude_code", append: harnessPrompt },
+    systemPrompt: { type: "preset", preset: "claude_code", append: harnessPrompt() },
     settingSources: ["project"],
     // Flag settings outrank the workspace's own, so the agent can't edit its way into harness state
     settings: {

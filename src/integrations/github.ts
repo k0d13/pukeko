@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { createSession, type Session } from "#/agent/index.ts";
 import { config, secrets } from "#/core/config.ts";
-import { send } from "#/discord/index.ts";
+import { saveReply } from "#/core/replies.ts";
 
 type Payload = Record<string, any>;
 type Mention = { where: string; url: string; text: string };
@@ -70,12 +70,12 @@ async function handle(event: string, payload: Payload) {
   const reply = await session.ask(
     `[GitHub mention from ${sender} in ${mention.where}]\n${mention.url}\n\n${mention.text}`,
   );
-  if (reply.trim() !== "NOTHING") await send(undefined, reply);
+  // The agent answers on GitHub itself, so this is only kept in case the owner wants to look
+  await saveReply("github", reply);
 }
 
 export function startGithub() {
   const { port } = config.github;
-  if (!port) return;
   session = createSession();
   Bun.serve({
     port,
