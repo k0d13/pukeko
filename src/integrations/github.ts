@@ -1,4 +1,4 @@
-import { createSession, type Session } from "#/agent/index.ts";
+import { channelSession } from "#/agent/index.ts";
 import { config, secrets } from "#/core/config.ts";
 import { saveReply } from "#/core/replies.ts";
 
@@ -15,8 +15,6 @@ type Item = { html_url: string; body?: string | null; user?: { login: string } |
 
 const api = "https://api.github.com";
 
-// Shared by every mention, kept out of the chats and forgotten on restart
-let session: Session;
 let lastModified: string | undefined;
 // Comments already answered, in case GitHub lists a thread again
 const answered = new Set<string>();
@@ -72,6 +70,9 @@ async function handle(n: Notification, login: string) {
       return void console.warn(`Ignoring a GitHub mention from ${sender} at ${item.html_url}`);
 
     console.log(`GitHub mention from ${sender} at ${item.html_url}`);
+    // Like a Discord channel: each issue or PR is its own conversation, unless the scope is shared
+    const thread = `github-${n.repository.full_name.replace("/", "-")}-${n.subject.url.split("/").pop()}`;
+    const session = await channelSession(thread);
     const where = `${n.repository.full_name} ${n.subject.type}: ${n.subject.title}`;
     const reply = await session.ask(
       `[GitHub mention from ${sender} in ${where}]\n${item.html_url}\n\n${item.body}`,
@@ -108,7 +109,6 @@ async function poll(login: string) {
 export async function startGithub() {
   const user = await json<{ login: string }>("/user");
   if (!user) throw new Error("GITHUB_TOKEN doesn't work, GitHub rejected it");
-  session = createSession();
   console.log(`Watching GitHub for @${user.login} mentions from ${config.github.owner}`);
   await poll(user.login);
 }
