@@ -1,6 +1,6 @@
 # Pukeko
 
-A small personal assistant harness: Discord in, Claude Code (via the Agent SDK, on your Claude subscription) out.
+A small personal assistant harness: Claude Code (via the Agent SDK, on your Claude subscription) behind whichever integrations you turn on (Discord, GitHub mentions), plus scheduled jobs.
 It ships as a single `pukeko` binary. Everything that makes the bot _yours_ (personality, memory, jobs, skills,
 integrations, config and secrets) lives in a workspace folder. `pukeko init` creates one with just
 the basics from `templates/`; personality, integrations and jobs are yours to add.
@@ -12,9 +12,11 @@ the basics from `templates/`; personality, integrations and jobs are yours to ad
 - `src/agent/`: conversations, resumed across restarts (`/new` starts a fresh one). One per channel or one shared, per `[conversations] scope`; jobs get their own that lasts until restart.
   Uses the server's `claude`, loads the workspace's `CLAUDE.md`, `.claude/`, and `.mcp.json` (`${VAR}` filled from `.env`).
   Blocks reading `.pukeko/` through settings the workspace can't override, plus an OS sandbox for Bash.
-- `src/discord/`: replies to the owner (from `pukeko.toml`, or the Discord application owner) in DMs, on @mention, and via `/ask`, `/new` (optionally switching model or effort), `/stop`, `/compact` and `/usage`.
+- `src/integrations/`: one folder or file per integration, each on when its table (`[discord]`, `[github]`) is in `pukeko.toml`. With none, only jobs run, and their replies are saved to `.pukeko/replies/`.
+- `src/integrations/discord/`: replies to the owner (`discord.owner` in `pukeko.toml`, or the Discord application owner) in DMs, on @mention, and via `/ask`, `/new` (optionally switching model or effort), `/stop`, `/compact` and `/usage`.
+- `src/integrations/github.ts`: optional `[github]` watcher. It polls the token account's notifications (conditional requests, so quiet checks are free), and when `github.owner` mentions the account anywhere, that becomes a prompt in its own conversation. The agent answers on GitHub itself. Mentions from anyone else are ignored.
 - `src/jobs.ts`: runs `jobs/<id>/job.md` on cron or one-off schedules; rescans every minute.
-- `src/agent/prompt.md`: the harness rules appended to Claude Code's system prompt.
+- `src/agent/prompt*.md`: the harness rules appended to Claude Code's system prompt: `prompt.md` always, plus one per enabled integration.
 
 ## Build
 
@@ -40,7 +42,7 @@ Releases: push a `v*` tag and `.github/workflows/release.yml` builds the binarie
 
 ## Configuring
 
-- `pukeko.toml`: Pukeko itself. Every key is optional and documented in the generated file;
+- `pukeko.toml`: Pukeko itself, with a table per integration. Every key is optional and documented in the generated file;
   unknown keys and wrong types are reported at startup.
 - `.env`: secrets. Kept out of the agent's environment, but it can `source .env` when a command needs them. Extra entries can be used in `.mcp.json` as `${NAME}`.
 - `CLAUDE.md`, `.mcp.json`, `.claude/skills/`: personality, integrations and skills, as in any Claude Code project.

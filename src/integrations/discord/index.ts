@@ -45,8 +45,10 @@ export async function startDiscord() {
   // A team-owned application reports the team, whose owner is the one we want
   const appOwner = application.owner;
   owner.id =
-    config.owner || ((appOwner && "ownerId" in appOwner ? appOwner.ownerId : appOwner?.id) ?? "");
-  if (!owner.id) throw new Error("Couldn't find the application's owner, set owner in pukeko.toml");
+    config.discord.owner ||
+    ((appOwner && "ownerId" in appOwner ? appOwner.ownerId : appOwner?.id) ?? "");
+  if (!owner.id)
+    throw new Error("Couldn't find the application's owner, set discord.owner in pukeko.toml");
   await application.commands.set(commands);
   console.log(`Logged in as ${client.user!.tag}, answering to ${owner.id}`);
 }

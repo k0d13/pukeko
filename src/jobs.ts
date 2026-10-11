@@ -2,9 +2,10 @@ import { mkdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Cron } from "croner";
 import { createSession, type Session } from "#/agent/index.ts";
-import { config } from "#/core/config.ts";
+import { config, integrations } from "#/core/config.ts";
 import { paths } from "#/core/paths.ts";
-import { send } from "#/discord/index.ts";
+import { saveReply } from "#/core/replies.ts";
+import { send } from "#/integrations/discord/index.ts";
 
 type Job = { id: string; schedule: string; channel?: string; prompt: string };
 
@@ -35,6 +36,14 @@ async function readJob(id: string): Promise<Job | undefined> {
   }
 }
 
+// Discord is the only place a reply can go for now. Without it the reply is kept in
+// .pukeko/replies/<id>.md, so a job that wants a response elsewhere should say so in its prompt
+async function deliver(id: string, channel: string | undefined, reply: string) {
+  if (integrations.discord) return send(channel, reply);
+  if (channel) console.warn(`jobs/${id}: has a channel but Discord isn't enabled`);
+  await saveReply(id, reply);
+}
+
 function schedule({ id, schedule, channel, prompt }: Job) {
   // One-offs are ISO datetimes, everything else is cron (MON-FRI, @daily and so on)
   const oneOff = /^\d{4}-\d{2}-\d{2}T/.test(schedule);
@@ -42,7 +51,7 @@ function schedule({ id, schedule, channel, prompt }: Job) {
     try {
       console.log(`Running job ${id}`);
       const reply = await session.ask(`[Scheduled job: ${id}]\n\n${prompt}`);
-      if (reply.trim() !== "NOTHING") await send(channel, reply);
+      if (reply.trim() !== "NOTHING") await deliver(id, channel, reply);
       // Deleted only once delivered, so a failed reminder retries on the next start
       if (oneOff) await rm(join(paths.jobs, id), { recursive: true, force: true });
     } catch (error) {

@@ -1,9 +1,6 @@
 # Pukeko config. Secrets go in .env
 # Everything here is optional; the commented values are the defaults
 
-# Discord user ID Pukeko answers to. Defaults to whoever owns the bot's Discord application
-# owner = "123456789012345678"
-
 # Used for job schedules and the time the agent sees. Defaults to the system timezone
 # timezone = "Pacific/Auckland"
 
@@ -23,3 +20,18 @@
 # "channel": each Discord channel, DM and thread is its own conversation, and they run in parallel
 # "shared":  one conversation everywhere, one message at a time
 # scope = "channel"
+
+# Integrations are on when their table is here. Delete or comment out the ones you don't want
+
+[discord]
+# Discord user ID Pukeko answers to. Defaults to whoever owns the bot's Discord application
+# Needs DISCORD_TOKEN in .env
+# owner = "123456789012345678"
+
+# [github]
+# Lets the owner talk to Pukeko by mentioning its GitHub account ("@pukeko fix this") on any issue,
+# PR or comment, in any repo the account can see. Pukeko watches the account's notifications,
+# which costs no Claude usage until there's a mention
+# Needs GITHUB_TOKEN in .env: a classic token with the notifications and repo scopes
+# The only GitHub user whose mentions are acted on. Everyone else's are ignored
+# owner = "octocat"

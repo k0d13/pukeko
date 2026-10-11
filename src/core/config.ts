@@ -7,14 +7,18 @@ export const effortLevels: EffortLevel[] = ["low", "medium", "high", "xhigh", "m
 
 // Every key in pukeko.toml is optional, so the defaults double as its schema
 const defaults = {
-  owner: "",
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   agent: { model: "", effort: "" as EffortLevel | "", sandbox: true },
   conversations: { scope: "channel" as "channel" | "shared" },
+  // Integrations are on when their table is in pukeko.toml, see `integrations`
+  discord: { owner: "" },
+  github: { owner: "" },
 };
 
 /** Filled by `loadConfig` */
 export let config = defaults;
+/** Which integrations have a table in pukeko.toml. Filled by `loadConfig` */
+export const integrations = { discord: false, github: false };
 /** From .env, kept out of process.env so the agent's shell never inherits them */
 export let secrets: Record<string, string> = {};
 
@@ -56,11 +60,18 @@ export async function loadConfig() {
   }
 
   const errors: string[] = [];
-  config = merge(defaults, Bun.TOML.parse(await toml.text()) as Table, errors);
+  const input = Bun.TOML.parse(await toml.text()) as Table;
+  config = merge(defaults, input, errors);
+  for (const name of Object.keys(integrations) as (keyof typeof integrations)[])
+    integrations[name] = name in input;
   secrets = await parseEnv(paths.env);
 
-  if (config.owner && !/^\d{17,20}$/.test(config.owner))
-    errors.push(`"owner" should be a Discord user ID (17-20 digits), not "${config.owner}"`);
+  if (integrations.discord) {
+    const { owner } = config.discord;
+    if (owner && !/^\d{17,20}$/.test(owner))
+      errors.push(`"discord.owner" should be a Discord user ID (17-20 digits), not "${owner}"`);
+    if (!secrets.DISCORD_TOKEN) errors.push("DISCORD_TOKEN is missing from .env");
+  }
   if (!["channel", "shared"].includes(config.conversations.scope))
     errors.push(`"conversations.scope" should be "channel" or "shared"`);
   if (config.agent.effort && !effortLevels.includes(config.agent.effort))
@@ -70,8 +81,12 @@ export async function loadConfig() {
   } catch {
     errors.push(`"timezone" "${config.timezone}" isn't a known timezone`);
   }
-  for (const name of ["DISCORD_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"])
-    if (!secrets[name]) errors.push(`${name} is missing from .env`);
+  if (integrations.github) {
+    if (!/^[a-z\d-]+$/i.test(config.github.owner))
+      errors.push(`"github.owner" should be a GitHub username`);
+    if (!secrets.GITHUB_TOKEN) errors.push("GITHUB_TOKEN is missing from .env");
+  }
+  if (!secrets.CLAUDE_CODE_OAUTH_TOKEN) errors.push("CLAUDE_CODE_OAUTH_TOKEN is missing from .env");
   if (!Bun.which("claude")) errors.push("`claude` isn't on PATH, install Claude Code first");
 
   if (errors.length) {
