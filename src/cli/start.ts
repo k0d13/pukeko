@@ -3,6 +3,7 @@ import { loadConfig } from "#/core/config.ts";
 import { paths } from "#/core/paths.ts";
 import { version } from "#/core/release.ts";
 import { startDiscord } from "#/discord/index.ts";
+import { startGithub } from "#/github.ts";
 import { startJobs } from "#/jobs.ts";
 
 export default defineCommand({
@@ -12,5 +13,6 @@ export default defineCommand({
     console.log(`Pukeko ${version} starting with workspace ${paths.workspace}`);
     await startDiscord();
     await startJobs();
+    startGithub();
   },
 });

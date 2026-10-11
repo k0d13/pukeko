@@ -11,6 +11,7 @@ const defaults = {
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   agent: { model: "", effort: "" as EffortLevel | "", sandbox: true },
   conversations: { scope: "channel" as "channel" | "shared" },
+  github: { port: 0, bot: "", owner: "" },
 };
 
 /** Filled by `loadConfig` */
@@ -69,6 +70,18 @@ export async function loadConfig() {
     new Intl.DateTimeFormat(undefined, { timeZone: config.timezone });
   } catch {
     errors.push(`"timezone" "${config.timezone}" isn't a known timezone`);
+  }
+  if (config.github.port) {
+    const { port, bot, owner } = config.github;
+    if (!Number.isInteger(port) || port < 1 || port > 65535)
+      errors.push(`"github.port" should be a port number (1-65535)`);
+    for (const [key, login] of [
+      ["bot", bot],
+      ["owner", owner],
+    ] as const)
+      if (!/^[a-z\d-]+$/i.test(login))
+        errors.push(`"github.${key}" should be a GitHub username when github.port is set`);
+    if (!secrets.GITHUB_WEBHOOK_SECRET) errors.push("GITHUB_WEBHOOK_SECRET is missing from .env");
   }
   for (const name of ["DISCORD_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"])
     if (!secrets[name]) errors.push(`${name} is missing from .env`);

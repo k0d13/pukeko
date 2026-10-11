@@ -23,3 +23,17 @@
 # "channel": each Discord channel, DM and thread is its own conversation, and they run in parallel
 # "shared":  one conversation everywhere, one message at a time
 # scope = "channel"
+
+[github]
+# Lets the owner talk to Pukeko by mentioning it on GitHub ("@pukeko fix this" on a PR or issue)
+# Pukeko listens for GitHub webhooks on this port. 0 turns it off. It needs to be reachable from
+# the internet (a tunnel works), with the webhook's secret as GITHUB_WEBHOOK_SECRET in .env
+# Subscribe the webhook (content type application/json) to issue comments, pull request review
+# comments, pull request reviews, issues and pull requests
+# port = 8787
+
+# Pukeko's GitHub username, which mentions are looked for
+# bot = "pukeko"
+
+# The only GitHub user whose mentions are acted on. Everyone else's are ignored
+# owner = "octocat"
