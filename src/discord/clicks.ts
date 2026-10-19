@@ -9,9 +9,11 @@ import {
   type ModalSubmitInteraction,
 } from "discord.js";
 import { channelSession } from "#/agent/index.ts";
+import { logger, preview } from "#/core/log.ts";
 import { type Entry, forget, lookup } from "./buttons.ts";
 import { respond, tell, whileTyping, where } from "./client.ts";
 
+const log = logger("discord");
 const kinds = { button: "button", input: "text input", select: "select menu" };
 
 type Node = Record<string, unknown>;
@@ -91,7 +93,10 @@ export async function handleComponent(
   interaction: MessageComponentInteraction | ModalSubmitInteraction,
 ) {
   const entry = lookup(interaction.customId);
-  if (!entry) return tell(interaction, "This has expired");
+  if (!entry) {
+    log.info(`An expired component was used, ${interaction.customId}`);
+    return tell(interaction, "This has expired");
+  }
   if (entry.kind === "input" && interaction.isButton())
     return interaction.showModal(inputModal(interaction.customId, entry));
 
@@ -116,9 +121,10 @@ export async function handleComponent(
     // A rejected edit leaves the click unanswered, so the turn still runs without it
     await onMessage
       .update({ components: disable(message, used, interaction.customId) })
-      .catch((error: Error) => console.warn("Couldn't grey out a used component:", error.message));
+      .catch((error: Error) => log.warn(`Couldn't grey out a used component: ${error.message}`));
   }
   if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
+  log.info(`${kinds[entry.kind]} "${entry.label}" used${detail ? `: ${preview(detail)}` : ""}`);
 
   const used = `[Discord ${kinds[entry.kind]} "${entry.label}" used by owner in ${where(interaction)}`;
   const context = message && excerpt(message);

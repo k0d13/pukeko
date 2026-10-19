@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { readJson, write } from "#/core/files.ts";
+import { logger } from "#/core/log.ts";
 import { paths } from "#/core/paths.ts";
 
 /** What a button, text input or select does, kept so it still works after restarts */
@@ -35,11 +36,16 @@ function save() {
 export async function loadButtons() {
   const saved = await readJson<Record<string, Entry>>(file(), {});
   const cutoff = Date.now() - maxAge;
+  const all = Object.entries(saved);
   entries = Object.fromEntries(
-    Object.entries(saved)
+    all
       .filter(([, e]) => e.created > cutoff)
       // Saved before entries were keyed by the whole custom ID
       .map(([id, e]) => [id.startsWith("pk:") ? id : `pk:${id}`, e]),
+  );
+  const kept = Object.keys(entries).length;
+  logger("discord").info(
+    `${kept} saved components still work${kept < all.length ? `, ${all.length - kept} older than 90 days dropped` : ""}`,
   );
 }
 

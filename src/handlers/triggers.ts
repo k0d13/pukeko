@@ -1,8 +1,10 @@
 import { Events } from "discord.js";
-import { report } from "#/core/log.ts";
+import { logger } from "#/core/log.ts";
 import { client } from "#/discord/client.ts";
 
 type Listener = (...args: unknown[]) => void;
+
+const log = logger("triggers");
 
 const events = new Set<string>(Object.values(Events));
 const attached = new Map<string, { event: string; listener: Listener }>();
@@ -21,11 +23,12 @@ export function addTrigger(id: string, module: Record<string, unknown>) {
     try {
       await run(...args);
     } catch (error) {
-      report(`triggers/${id} threw`, error);
+      log.report(`triggers/${id} threw on ${event}`, error);
     }
   };
   client.on(event, listener);
   attached.set(id, { event, listener });
+  return `on ${event}`;
 }
 
 export function removeTrigger(id: string) {

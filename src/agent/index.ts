@@ -8,6 +8,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { config, secrets } from "#/core/config.ts";
 import { readJson, write } from "#/core/files.ts";
+import { logger, preview, seconds } from "#/core/log.ts";
 import { paths } from "#/core/paths.ts";
 import harnessPrompt from "./prompt.md" with { type: "text" };
 
@@ -17,6 +18,7 @@ export type Session = ReturnType<typeof createSession>;
 export type Setup = { model: string; effort: EffortLevel | "" };
 type State = Setup & { id: string };
 
+const log = logger("agent");
 const warned = new Set<string>();
 
 // ${VAR} is filled from .env here, so tokens reach MCP servers but never the agent's
@@ -27,7 +29,7 @@ async function mcpServers() {
   const raw = (await file.text()).replace(/\$\{(\w+)\}/g, (_, name: string) => {
     if (!(name in secrets) && !warned.has(name)) {
       warned.add(name);
-      console.warn(`.mcp.json uses \${${name}} but .env doesn't define it`);
+      log.warn(`.mcp.json uses \${${name}} but .env doesn't define it`);
     }
     return secrets[name] ?? "";
   });
@@ -52,6 +54,8 @@ async function options(state: State): Promise<Options> {
       permissions: {
         deny: ["./.pukeko/**"].flatMap((p) => [`Read(${p})`, `Edit(${p})`]),
       },
+      // No Claude co-author trailer or link on the agent's commits and PRs
+      attribution: { commit: "", pr: "" },
     },
     // The OS sandbox applies the deny rules to Bash too
     sandbox: config.agent.sandbox
@@ -96,8 +100,25 @@ async function* idle(): AsyncGenerator<never> {
   await new Promise(() => {});
 }
 
+// What a tool was pointed at, for the log
+function target(input: Record<string, unknown>) {
+  const value =
+    input.command ??
+    input.file_path ??
+    input.path ??
+    input.pattern ??
+    input.url ??
+    input.query ??
+    input.description;
+  return typeof value === "string" ? ` ${preview(value, 100)}` : "";
+}
+
+function tokens(count = 0) {
+  return count < 1000 ? String(count) : `${(count / 1000).toFixed(1)}k`;
+}
+
 /** One conversation, running turns one at a time. With a `file` it resumes across restarts */
-export function createSession(file?: string, saved?: Partial<State>) {
+export function createSession(name: string, file?: string, saved?: Partial<State>) {
   let state: State = { model: config.agent.model, effort: config.agent.effort, id: "", ...saved };
   let current: AbortController | undefined;
   let queue = Promise.resolve();
@@ -109,6 +130,7 @@ export function createSession(file?: string, saved?: Partial<State>) {
   }
 
   function restart(setup: Partial<Setup> = {}) {
+    if (state.id) log.info(`${name}: conversation ${state.id.slice(0, 8)} ended`);
     generation++;
     state = { ...state, ...setup, id: "" };
     save();
@@ -120,6 +142,10 @@ export function createSession(file?: string, saved?: Partial<State>) {
     const resuming = Boolean(state.id);
     let started = false;
     let reply = "";
+    const begun = Date.now();
+    log.info(
+      `${name}: turn started, ${resuming ? `resuming ${state.id.slice(0, 8)}` : "new conversation"}, ${state.model || "default model"}${state.effort ? `, ${state.effort} effort` : ""}: ${preview(prompt)}`,
+    );
     try {
       for await (const message of query({
         prompt,
@@ -130,6 +156,10 @@ export function createSession(file?: string, saved?: Partial<State>) {
           if (turnGeneration !== generation) continue;
           state.id = message.session_id;
           save();
+        } else if (message.type === "assistant") {
+          for (const block of message.message.content)
+            if (block.type === "tool_use")
+              log.info(`${name}: ${block.name}${target(block.input as Record<string, unknown>)}`);
         } else if (message.type === "rate_limit_event") {
           recordLimits(message.rate_limit_info);
         } else if (message.type === "result") {
@@ -137,15 +167,22 @@ export function createSession(file?: string, saved?: Partial<State>) {
             message.subtype === "success"
               ? message.result
               : `⚠️ Turn ended early (${message.subtype})`;
+          const { input_tokens, output_tokens, cache_read_input_tokens } = message.usage;
+          const line = `${name}: turn ${message.subtype === "success" ? "done" : `ended early (${message.subtype})`} in ${seconds(message.duration_ms)}, ${message.num_turns} steps, ${tokens(input_tokens + (cache_read_input_tokens ?? 0))} tokens in (${tokens(cache_read_input_tokens ?? 0)} cached), ${tokens(output_tokens)} out, ${reply.length} characters back`;
+          if (message.subtype === "success") log.info(line);
+          else log.warn(line);
         }
       }
       return reply;
     } catch (error) {
-      if (abort.signal.aborted) return "⏹️ Stopped";
-      console.error(error);
+      if (abort.signal.aborted) {
+        log.info(`${name}: turn stopped after ${seconds(Date.now() - begun)}`);
+        return "⏹️ Stopped";
+      }
+      log.error(`${name}: turn failed after ${seconds(Date.now() - begun)}`, error);
       // A saved session that can't be resumed fails before init, so start fresh
       if (resuming && !started) {
-        console.warn(`Couldn't resume session ${state.id}, starting a new one`);
+        log.warn(`${name}: couldn't resume ${state.id}, starting a new conversation`);
         restart();
         return runTurn(prompt);
       }
@@ -203,7 +240,7 @@ export function channelSession(channelId: string) {
   let session = sessions.get(name);
   if (!session) {
     const file = join(paths.state, `${name}.json`);
-    session = readJson<Partial<State>>(file, {}).then((saved) => createSession(file, saved));
+    session = readJson<Partial<State>>(file, {}).then((saved) => createSession(name, file, saved));
     sessions.set(name, session);
   }
   return session;
@@ -213,5 +250,5 @@ let background: Session | undefined;
 
 /** Shared by jobs and handlers, kept out of the chats and forgotten on restart */
 export function backgroundSession() {
-  return (background ??= createSession());
+  return (background ??= createSession("background"));
 }

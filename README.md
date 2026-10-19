@@ -7,8 +7,8 @@ the basics from `templates/`; personality, integrations and jobs are yours to ad
 
 ## How it works
 
-- `src/cli/`: the `pukeko` command (`index.ts`), one file per subcommand: `start` (the default), `init`, `service`, `restart`, `logs` and `upgrade`.
-- `src/core/`: workspace paths (`--workspace DIR`, `$PUKEKO_WORKSPACE`, or `~/.pukeko/workspace`), config from `pukeko.toml` and `.env`, release info, and the folder watcher jobs, triggers and commands share (`watch.ts`), which logs loads and failures to `logs/pukeko.log` for the agent to read. Secrets are kept out of the agent's environment; it sources `.env` when a command needs them.
+- `src/cli/`: the `pukeko` command (`index.ts`), one file per subcommand: `start` (the default), `init`, `check` (config and secrets), `jobs` (when each runs next), `service` (`install`, `uninstall`, `start`, `stop`, `restart`, `status`, `logs`) and `upgrade` (`--check` to only look).
+- `src/core/`: workspace paths (`--workspace DIR`, `$PUKEKO_WORKSPACE`, or `~/.pukeko/workspace`), config from `pukeko.toml` and `.env`, release info, scoped console logging (`log.ts`: each turn's tools, timing and tokens, messages, clicks, commands and job runs), and the folder watcher jobs, triggers and commands share (`watch.ts`), which logs loads and failures to `logs/pukeko.log` for the agent to read. Secrets are kept out of the agent's environment; it sources `.env` when a command needs them.
 - `src/agent/`: conversations, resumed across restarts (`/new` starts a fresh one). One per channel or one shared, per `[conversations] scope`; jobs and handlers share one that lasts until restart.
   Uses the server's `claude`, loads the workspace's `CLAUDE.md`, `.claude/`, and `.mcp.json` (`${VAR}` filled from `.env`).
   Blocks reading `.pukeko/` through settings the workspace can't override, plus an OS sandbox for Bash.
@@ -36,7 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/k0d13/pukeko/main/install.sh | sh
 
 This installs `pukeko` to `~/.local/bin`, installs Claude Code and the sandbox dependencies if missing,
 and runs `pukeko init` to create `~/.pukeko/workspace`, which offers to run `claude setup-token` and asks for your Discord bot token
-(anything skipped goes in `~/.pukeko/workspace/.env`). Then run `pukeko` to try it, and `pukeko service` to keep it running. Later, `pukeko upgrade` updates it and `pukeko logs` follows along.
+(anything skipped goes in `~/.pukeko/workspace/.env`). Then run `pukeko check` and `pukeko` to try it, and `pukeko service install` to keep it running. Later, `pukeko upgrade` updates it, `pukeko service logs` follows along and `pukeko service status`, `stop`, `start` and `restart` control it.
 
 Discord: create an app at discord.com/developers, add a bot, enable **Message Content Intent**,
 and invite it with the `bot` + `applications.commands` scopes.
@@ -51,4 +51,4 @@ Releases: push a `v*` tag and `.github/workflows/release.yml` builds the binarie
 - `triggers/`, `commands/`: the bot's own behaviour, as code the agent writes (see `src/handlers/`).
 - `CLAUDE.md`, `.mcp.json`, `.claude/skills/`: personality, integrations and skills, as in any Claude Code project.
 - `.claude/settings.json`: normal Claude Code settings (hooks, permission rules, env, statusline...).
-  Pukeko layers its own rules on top: `.pukeko/` is always denied, whatever this file says.
+  Pukeko layers its own rules on top: `.pukeko/` is always denied and commits get no Claude co-author, whatever this file says.

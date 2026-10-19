@@ -57,7 +57,7 @@ esac
 # Re-running this upgrades, so pick up the new binary if the service is running
 if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet pukeko 2>/dev/null; then
   say "Restarting the pukeko service"
-  "$bin_dir/pukeko" restart
+  "$bin_dir/pukeko" service restart
   exit 0
 fi
 
@@ -73,5 +73,5 @@ cat <<EOF
 Next:
   1. Any token you skipped goes in .env (CLAUDE_CODE_OAUTH_TOKEN, DISCORD_TOKEN)
   2. pukeko                     to try it in the foreground
-  3. pukeko service             to keep it running (pukeko logs, restart, upgrade)
+  3. pukeko service install     to keep it running (pukeko service logs, status, restart)
 EOF

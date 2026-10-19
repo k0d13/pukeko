@@ -1,5 +1,5 @@
-import { report } from "#/core/log.ts";
-import { type Command, commands, registerCommands } from "#/discord/commands.ts";
+import { logger } from "#/core/log.ts";
+import { type Command, commands, label, registerCommands } from "#/discord/commands.ts";
 
 type Module = Record<string, unknown>;
 
@@ -33,6 +33,7 @@ export function addCommand(id: string, module: Module) {
     everyone: module.everyone === true,
     file,
   });
+  return `as ${label({ data })}`;
 }
 
 export function removeCommand(id: string) {
@@ -45,6 +46,9 @@ export async function syncCommands() {
     await registerCommands();
   } catch (error) {
     // Discord takes all or nothing, so the last set that worked stays registered
-    report("Discord rejected the commands, the previous set stays registered", error);
+    logger("commands").report(
+      "Discord rejected the commands, the previous set stays registered",
+      error,
+    );
   }
 }

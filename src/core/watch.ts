@@ -1,14 +1,15 @@
 import { watch } from "node:fs";
 import { mkdir, stat } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
-import { report } from "./log.ts";
+import { logger } from "./log.ts";
 
 type Watched = {
   dir: string;
   /** Relative to `dir`. A file in a subfolder is that subfolder's, so its ID is the subfolder */
   pattern: string;
+  // What it returns goes on the log line, like when a job next runs
   /** Takes over a new or edited file, throwing if it's unusable so the old version stays */
-  add(id: string, path: string): unknown;
+  add(id: string, path: string): Promise<string | void> | string | void;
   remove(id: string): void;
   /** After a scan that changed anything */
   changed?(): unknown;
@@ -17,6 +18,7 @@ type Watched = {
 /** Keeps a folder's files in step with what's loaded, by modification time */
 export async function watchFolder({ dir, pattern, add, remove, changed }: Watched) {
   const name = basename(dir);
+  const log = logger(name);
   const loaded = new Map<string, number>();
   let scanning = Promise.resolve();
 
@@ -36,10 +38,10 @@ export async function watchFolder({ dir, pattern, add, remove, changed }: Watche
       loaded.set(id, mtime);
       dirty = true;
       try {
-        await add(id, path);
-        report(`${had ? "Reloaded" : "Loaded"} ${name}/${file}`);
+        const note = await add(id, path);
+        log.report(`${had ? "Reloaded" : "Loaded"} ${name}/${file}${note ? `, ${note}` : ""}`);
       } catch (error) {
-        report(
+        log.report(
           `${name}/${file} didn't load${had ? ", the previous version keeps running" : ""}`,
           error,
         );
@@ -50,18 +52,19 @@ export async function watchFolder({ dir, pattern, add, remove, changed }: Watche
       loaded.delete(id);
       remove(id);
       dirty = true;
-      report(`Removed ${name}/${id}`);
+      log.report(`Removed ${name}/${id}`);
     }
     if (dirty) await changed?.();
   }
 
   function rescan() {
-    scanning = scanning.then(scan).catch(console.error);
+    scanning = scanning.then(scan).catch((error) => log.error("Scan failed", error));
     return scanning;
   }
 
   await mkdir(dir, { recursive: true });
   await rescan();
+  log.info(`Watching ${dir}, ${loaded.size} found`);
   // Saves arrive as bursts of events, so wait for them to settle
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -70,7 +73,7 @@ export async function watchFolder({ dir, pattern, add, remove, changed }: Watche
       timer = setTimeout(rescan, 300);
     });
   } catch (error) {
-    console.warn(`Couldn't watch ${dir}, changes apply within a minute`, error);
+    log.warn(`Couldn't watch ${dir}, changes apply within a minute`, error);
   }
   // Catches what the watcher misses, like the folder being replaced by a git checkout
   setInterval(rescan, 60_000);

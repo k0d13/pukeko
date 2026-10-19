@@ -16,9 +16,12 @@ import {
   StringSelectMenuBuilder,
   TextDisplayBuilder,
 } from "discord.js";
+import { logger } from "#/core/log.ts";
 import { paths } from "#/core/paths.ts";
 import { register } from "./buttons.ts";
 import { type Action, type Block, parse, type Style } from "./markup.ts";
+
+const log = logger("discord");
 
 export type Payload = BaseMessageOptions & { flags?: MessageFlags.IsComponentsV2 };
 
@@ -262,6 +265,7 @@ export function render(reply: string): Payload[] {
     problems.length && `Couldn't render ${problems.join("; ")}`,
   ].filter(Boolean);
   const note = notes.length ? `-# ${notes.join(". ")}` : "";
+  if (note) log.warn(`Reply markup: ${notes.join(". ")}`);
   if (!rich) return chunks(note ? `${reply}\n${note}` : reply).map((content) => ({ content }));
   if (note) all.push(...textPieces(note));
   if (!all.length) all.push(...textPieces(""));
@@ -285,11 +289,14 @@ export async function deliver(
   const parts = render(reply);
   try {
     for (const part of parts) await next(part);
+    log.info(
+      `Sent a ${parts[0]?.flags ? "rich" : "plain"} reply, ${reply.length} characters in ${parts.length} messages`,
+    );
   } catch (error) {
     // A layout Discord rejects still gets through, as the raw markup
     if (!(error instanceof DiscordAPIError) || error.code !== 50035 || !parts[0]?.flags)
       throw error;
-    console.warn("Discord rejected a rich reply", error.message);
+    log.warn(`Discord rejected a rich reply, sending it as text: ${error.message}`);
     const note = `-# Couldn't render this reply: ${error.message.split("\n").slice(0, 3).join(" ")}`;
     for (const content of chunks(`${reply}\n${note}`)) await next({ content });
   }

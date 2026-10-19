@@ -1,10 +1,16 @@
+import { logger } from "./log.ts";
+
+const log = logger("files");
 const writes = new Map<string, Promise<unknown>>();
 
 /** Writes in the order called, so an older write to a file never lands after a newer one */
 export function write(path: string, text: string) {
   const done = (writes.get(path) ?? Promise.resolve())
     .then(() => Bun.write(path, text))
-    .then(() => {}, console.error);
+    .then(
+      () => {},
+      (error) => log.error(`Couldn't write ${path}`, error),
+    );
   writes.set(path, done);
   return done;
 }
@@ -15,7 +21,7 @@ export async function readJson<T>(path: string, fallback: T): Promise<T> {
     return await Bun.file(path).json();
   } catch (error) {
     if ((error as { code?: string }).code !== "ENOENT")
-      console.warn(`Couldn't read ${path}, starting fresh`, error);
+      log.warn(`Couldn't read ${path}, starting fresh`, error);
     return fallback;
   }
 }

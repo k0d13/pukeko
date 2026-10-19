@@ -11,9 +11,12 @@ import {
   type ModalSubmitInteraction,
 } from "discord.js";
 import { channelSession } from "#/agent/index.ts";
+import { logger, preview } from "#/core/log.ts";
 import { client, owner, respond, whileTyping, where } from "./client.ts";
 import type { Command } from "./commands.ts";
 import { deliver } from "./render.ts";
+
+const log = logger("discord");
 
 function attachments(message: Message) {
   return message.attachments.map((a) => `\n[Attachment: ${a.name} ${a.url}]`).join("");
@@ -38,6 +41,10 @@ export async function handleMessage(message: Message) {
     return;
   const channel = message.channel;
   if (!channel.isSendable()) return;
+  const files = message.attachments.size ? ` with ${message.attachments.size} attachments` : "";
+  log.info(
+    `Message in ${"name" in channel ? `#${channel.name}` : "DM"}${files}: ${preview(message.content)}`,
+  );
   const reply = await whileTyping(channel, async () =>
     (await channelSession(message.channelId)).ask(await describe(message)),
   );

@@ -2,9 +2,9 @@
 import { defineCommand, runMain } from "citty";
 import { setWorkspace } from "#/core/paths.ts";
 import { version } from "#/core/release.ts";
+import check from "./check.ts";
 import init from "./init.ts";
-import logs from "./logs.ts";
-import restart from "./restart.ts";
+import jobs from "./jobs.ts";
 import service from "./service.ts";
 import start from "./start.ts";
 import upgrade from "./upgrade.ts";
@@ -19,7 +19,7 @@ const main = defineCommand({
   },
   setup: ({ args }) => setWorkspace(args.workspace),
   default: "start",
-  subCommands: { start, init, service, restart, logs, upgrade },
+  subCommands: { start, init, check, jobs, service, upgrade },
 });
 
 await runMain(main);
