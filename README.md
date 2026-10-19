@@ -16,6 +16,9 @@ the basics from `templates/`; personality, integrations and jobs are yours to ad
   Replies are markdown plus directives (`markup.ts`, documented for the agent in `prompt.md`), rendered as Components v2 messages (`render.ts`) with inline images, files, boxes, buttons, text inputs and selects.
   Each button carries a prompt the agent wrote; a click (`clicks.ts`) sends it as a new turn in that channel's conversation. They're kept in `.pukeko/buttons.json` (`buttons.ts`) for 90 days.
 - `src/jobs.ts`: runs `jobs/<id>/job.md` on cron or one-off schedules; rescans every minute.
+- `src/handlers/`: agent-written `triggers/*.ts` (discord.js event listeners) and `commands/*.ts` (slash and context menu commands), imported into the harness and reloaded as the files change (`folder.ts`).
+  They import `discord.js` and a `pukeko` module (`api.ts`: `ask`, `send`, `render`, `load`/`save` state) as Bun virtual modules, so the workspace needs no `node_modules`.
+  Load errors and crashes go to `logs/handlers.log` for the agent to read. This code runs unsandboxed in the harness process, so it can reach `.env` and `.pukeko/`.
 - `src/agent/prompt.md`: the harness rules appended to Claude Code's system prompt.
 
 ## Build
@@ -45,6 +48,7 @@ Releases: push a `v*` tag and `.github/workflows/release.yml` builds the binarie
 - `pukeko.toml`: Pukeko itself. Every key is optional and documented in the generated file;
   unknown keys and wrong types are reported at startup.
 - `.env`: secrets. Kept out of the agent's environment, but it can `source .env` when a command needs them. Extra entries can be used in `.mcp.json` as `${NAME}`.
+- `triggers/`, `commands/`: the bot's own behaviour, as code the agent writes (see `src/handlers/`).
 - `CLAUDE.md`, `.mcp.json`, `.claude/skills/`: personality, integrations and skills, as in any Claude Code project.
 - `.claude/settings.json`: normal Claude Code settings (hooks, permission rules, env, statusline...).
   Pukeko layers its own rules on top: `.pukeko/` is always denied, whatever this file says.

@@ -18,8 +18,14 @@ export const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.MessageContent,
+    // For triggers. Members and presences are privileged, so they'd need enabling in the portal
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.DirectMessageReactions,
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildScheduledEvents,
   ],
-  partials: [Partials.Channel],
+  // Without these, events on messages from before startup never fire
+  partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
 });
 
 // Installed only as a user app, the bot isn't in the channel and sees nothing but the interaction

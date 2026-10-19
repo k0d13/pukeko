@@ -2,13 +2,13 @@ import {
   type CommandInteraction,
   Events,
   type Interaction,
-  InteractionContextType,
   type MessageComponentInteraction,
   MessageFlags,
   type ModalSubmitInteraction,
 } from "discord.js";
 import { channelSession } from "#/agent/index.ts";
 import { config, secrets } from "#/core/config.ts";
+import { handleCustom } from "#/handlers/index.ts";
 import * as ask from "./ask.ts";
 import { loadButtons } from "./buttons.ts";
 import { handleComponent } from "./clicks.ts";
@@ -16,16 +16,6 @@ import { client, owner } from "./client.ts";
 import * as conversation from "./conversation.ts";
 
 export { send } from "./client.ts";
-
-const commands = [...ask.commands, ...conversation.commands].map((command) =>
-  command
-    .setContexts(
-      InteractionContextType.Guild,
-      InteractionContextType.BotDM,
-      InteractionContextType.PrivateChannel,
-    )
-    .toJSON(),
-);
 
 const askNames = new Set(ask.commands.map((command) => command.name));
 
@@ -36,6 +26,8 @@ function notYours(
 }
 
 async function handleInteraction(interaction: Interaction) {
+  // The workspace's own commands, which decide for themselves who can use them
+  if (await handleCustom(interaction)) return;
   if (interaction.isAutocomplete()) return conversation.autocomplete(interaction);
   // Other modals, like Ask Pukeko's, are awaited where they're shown
   if (interaction.isMessageComponent() || interaction.isModalSubmit()) {
@@ -69,6 +61,6 @@ export async function startDiscord() {
   owner.id =
     config.owner || ((appOwner && "ownerId" in appOwner ? appOwner.ownerId : appOwner?.id) ?? "");
   if (!owner.id) throw new Error("Couldn't find the application's owner, set owner in pukeko.toml");
-  await application.commands.set(commands);
+  // Commands are registered by startHandlers, once the workspace's are loaded too
   console.log(`Logged in as ${client.user!.tag}, answering to ${owner.id}`);
 }

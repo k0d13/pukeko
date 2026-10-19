@@ -8,6 +8,10 @@ export const paths = {
   env: "",
   mcp: "",
   jobs: "",
+  triggers: "",
+  commands: "",
+  /** Handler load errors and crashes, for the agent to read */
+  handlerLog: "",
   /** Saved conversations, which the agent is denied */
   state: "",
   unit: join(homedir(), ".config/systemd/user/pukeko.service"),
@@ -23,6 +27,9 @@ export function setWorkspace(flag?: string) {
     env: join(workspace, ".env"),
     mcp: join(workspace, ".mcp.json"),
     jobs: join(workspace, "jobs"),
+    triggers: join(workspace, "triggers"),
+    commands: join(workspace, "commands"),
+    handlerLog: join(workspace, "logs", "handlers.log"),
     state: join(workspace, ".pukeko"),
   });
 }
