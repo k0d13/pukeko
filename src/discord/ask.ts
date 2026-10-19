@@ -1,9 +1,7 @@
 import {
   ApplicationCommandType,
-  ApplicationIntegrationType,
   ChannelType,
   ContextMenuCommandBuilder,
-  InteractionContextType,
   type Message,
   ModalBuilder,
   SlashCommandBuilder,
@@ -13,7 +11,8 @@ import {
   type ModalSubmitInteraction,
 } from "discord.js";
 import { channelSession, type Session } from "#/agent/index.ts";
-import { client, deliver, owner, send } from "./client.ts";
+import { client, keepTyping, owner, send, where } from "./client.ts";
+import { deliver } from "./render.ts";
 
 export const commands = [
   new SlashCommandBuilder()
@@ -43,9 +42,7 @@ export async function handleMessage(message: Message) {
   if (!message.channel.isSendable()) return;
 
   const channel = message.channel;
-  const typing = () => channel.sendTyping().catch(() => {});
-  typing();
-  const interval = setInterval(typing, 8000);
+  const stopTyping = keepTyping(channel);
   try {
     const session = await channelSession(message.channelId);
     const reply = await session.ask(await describe(message));
@@ -55,23 +52,8 @@ export async function handleMessage(message: Message) {
       (c) => channel.send(c),
     );
   } finally {
-    clearInterval(interval);
+    stopTyping();
   }
-}
-
-// Installed only as a user app, the bot isn't in the channel and sees nothing but the command
-function where(interaction: ChatInputCommandInteraction | MessageContextMenuCommandInteraction) {
-  const channel = interaction.channel;
-  const name =
-    interaction.context === InteractionContextType.BotDM
-      ? "DM"
-      : interaction.context === InteractionContextType.PrivateChannel
-        ? "a DM or group DM"
-        : `#${channel && "name" in channel ? channel.name : interaction.channelId}`;
-  const readable =
-    interaction.context === InteractionContextType.BotDM ||
-    ApplicationIntegrationType.GuildInstall in interaction.authorizingIntegrationOwners;
-  return `${name}, ${readable ? "a channel Pukeko can read" : "a channel Pukeko can't read or post in outside this reply"}`;
 }
 
 async function answer(

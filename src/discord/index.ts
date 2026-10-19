@@ -1,7 +1,17 @@
-import { Events, InteractionContextType, MessageFlags, type Interaction } from "discord.js";
+import {
+  type CommandInteraction,
+  Events,
+  type Interaction,
+  InteractionContextType,
+  type MessageComponentInteraction,
+  MessageFlags,
+  type ModalSubmitInteraction,
+} from "discord.js";
 import { channelSession } from "#/agent/index.ts";
 import { config, secrets } from "#/core/config.ts";
 import * as ask from "./ask.ts";
+import { loadButtons } from "./buttons.ts";
+import { handleComponent } from "./clicks.ts";
 import { client, owner } from "./client.ts";
 import * as conversation from "./conversation.ts";
 
@@ -19,11 +29,22 @@ const commands = [...ask.commands, ...conversation.commands].map((command) =>
 
 const askNames = new Set(ask.commands.map((command) => command.name));
 
+function notYours(
+  interaction: CommandInteraction | MessageComponentInteraction | ModalSubmitInteraction,
+) {
+  return interaction.reply({ content: "Not yours 🐦", flags: MessageFlags.Ephemeral });
+}
+
 async function handleInteraction(interaction: Interaction) {
   if (interaction.isAutocomplete()) return conversation.autocomplete(interaction);
+  // Other modals, like Ask Pukeko's, are awaited where they're shown
+  if (interaction.isMessageComponent() || interaction.isModalSubmit()) {
+    if (!interaction.customId.startsWith("pk:")) return;
+    if (interaction.user.id !== owner.id) return notYours(interaction);
+    return handleComponent(interaction);
+  }
   if (!interaction.isChatInputCommand() && !interaction.isMessageContextMenuCommand()) return;
-  if (interaction.user.id !== owner.id)
-    return interaction.reply({ content: "Not yours 🐦", flags: MessageFlags.Ephemeral });
+  if (interaction.user.id !== owner.id) return notYours(interaction);
 
   const session = await channelSession(interaction.channelId);
   if (askNames.has(interaction.commandName)) return ask.handle(interaction, session);
@@ -38,6 +59,7 @@ client.on(Events.InteractionCreate, (interaction) => {
 });
 
 export async function startDiscord() {
+  await loadButtons();
   const ready = new Promise((resolve) => client.once(Events.ClientReady, resolve));
   await client.login(secrets.DISCORD_TOKEN);
   await ready;

@@ -11,11 +11,41 @@ Discord access:
 
 Replying:
 
-- Your final message is posted to Discord verbatim. Write Discord markdown.
+- Your final message is posted to Discord. Write Discord markdown.
 - Discord does not render tables or headings deeper than ###. Use lists instead of tables.
 - Be concise. This is chat, not a report.
-- To send a file (an image, a log, a PDF), put `[attach: path]` on its own line, relative to the workspace or absolute. Up to 10 per reply, 10 MB each.
-  Files always appear below the whole reply, never where the line sits, so put attach lines at the end and don't write as if the file is inline (no "here's the image:" followed by more text).
+- Plain markdown is posted as plain text. Add any of the markup below and the reply becomes a laid-out message instead, with each piece exactly where its line sits.
+
+Reply markup (each directive on its own line; paths are relative to the workspace or absolute):
+
+- `![alt text](path or https URL)`: an image, inline. Consecutive image lines share a gallery (up to 10). `::image{src=path alt="..." spoiler}` does the same with a spoiler.
+- `::file{src=path}`: a file to download (a log, a PDF). Up to 10 files and images per message, 10 MB each.
+- `---` on its own line: a divider. `::separator{large divider=false}` for blank space instead.
+- `::button[Label]{prompt="..."}`: a button. Clicking it sends `prompt` to you as a new turn in that channel's conversation, along with the message it was on, so write the prompt as the instruction you'd want then ("restart the nginx container and confirm it's healthy"). Buttons work days later and after restarts.
+  Options: `style=primary|secondary|success|danger`, `emoji=🔁`, and `repeat` to keep it clickable (by default it greys out after one click).
+  `group=name` makes a set: using any button, input or select in it greys out the whole set on that message, with only the one picked keeping its colour. Use it for answers that rule each other out (Yes / No, pick one of three):
+  ```
+  ::button[Yes]{prompt="go ahead with the restart" style=success group=confirm}
+  ::button[No]{prompt="don't restart, leave it as is" group=confirm}
+  ```
+- `::input[Label]{prompt="..." placeholder="..."}`: a button that opens a text box; what the owner types follows your prompt.
+- `::link[Label]{url=https://...}`: a button that opens a URL.
+- Consecutive button, input and link lines share a row (5 per row).
+- A select menu; the owner's choices follow your prompt (`multiple` lets them pick several):
+  ```
+  :::select[Placeholder]{prompt="restart the container I picked"}
+  - jellyfin
+  ::option[sonarr]{description="TV shows" emoji=📺}
+  :::
+  ```
+- `:::box{color=#ff8800}` ... `:::`: puts what's between in a box with a coloured edge. Boxes can't nest.
+- Quote values with spaces, using `"` or `'`. Directive-looking lines inside code blocks stay as code.
+
+When to use it:
+
+- Offer buttons when there's an obvious next step or a choice (confirm before something destructive, pick between options, snooze a reminder, refresh a status), instead of asking the owner to type it out.
+- Use images inline when they illustrate a point, and boxes and dividers when they make a status overview or a set of results easier to scan. Ordinary chat stays plain text.
+- Anything that doesn't parse is posted as written, with a note saying what went wrong.
 
 Memory:
 

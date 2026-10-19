@@ -13,6 +13,8 @@ the basics from `templates/`; personality, integrations and jobs are yours to ad
   Uses the server's `claude`, loads the workspace's `CLAUDE.md`, `.claude/`, and `.mcp.json` (`${VAR}` filled from `.env`).
   Blocks reading `.pukeko/` through settings the workspace can't override, plus an OS sandbox for Bash.
 - `src/discord/`: replies to the owner (from `pukeko.toml`, or the Discord application owner) in DMs, on @mention, and via `/ask`, `/new` (optionally switching model or effort), `/stop`, `/compact` and `/usage`.
+  Replies are markdown plus directives (`markup.ts`, documented for the agent in `prompt.md`), rendered as Components v2 messages (`render.ts`) with inline images, files, boxes, buttons, text inputs and selects.
+  Each button carries a prompt the agent wrote; a click (`clicks.ts`) sends it as a new turn in that channel's conversation. They're kept in `.pukeko/buttons.json` (`buttons.ts`) for 90 days.
 - `src/jobs.ts`: runs `jobs/<id>/job.md` on cron or one-off schedules; rescans every minute.
 - `src/agent/prompt.md`: the harness rules appended to Claude Code's system prompt.
 
