@@ -3,42 +3,40 @@ import { mkdir, stat } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { report } from "./log.ts";
 
-export type Module = Record<string, unknown>;
-
-type Folder = {
+type Watched = {
   dir: string;
-  /** Takes over a freshly imported module, throwing if it's unusable so the old one stays */
-  add(id: string, module: Module): void;
+  /** Relative to `dir`. A file in a subfolder is that subfolder's, so its ID is the subfolder */
+  pattern: string;
+  /** Takes over a new or edited file, throwing if it's unusable so the old version stays */
+  add(id: string, path: string): unknown;
   remove(id: string): void;
   /** After a scan that changed anything */
   changed?(): unknown;
 };
 
-/** Imports every top-level .ts or .js file in a folder, re-importing them as they change */
-export async function watchFolder(folder: Folder) {
-  const name = basename(folder.dir);
+/** Keeps a folder's files in step with what's loaded, by modification time */
+export async function watchFolder({ dir, pattern, add, remove, changed }: Watched) {
+  const name = basename(dir);
   const loaded = new Map<string, number>();
   let scanning = Promise.resolve();
 
   async function scan() {
-    // Subfolders are left alone, so helpers can live there
-    const glob = new Bun.Glob("*.{ts,js,mts,mjs}");
-    const files = await Array.fromAsync(glob.scan({ cwd: folder.dir })).catch(() => []);
+    const files = await Array.fromAsync(new Bun.Glob(pattern).scan({ cwd: dir })).catch(() => []);
     const found = new Set<string>();
-    let changed = false;
+    let dirty = false;
     for (const file of files) {
-      const id = file.slice(0, -extname(file).length);
+      const [first, nested] = file.split(/[\\/]/) as [string, string?];
+      const id = nested ? first : first.slice(0, -extname(first).length);
       found.add(id);
-      const path = join(folder.dir, file);
+      const path = join(dir, file);
       const mtime = (await stat(path).catch(() => undefined))?.mtimeMs;
       if (mtime === undefined || loaded.get(id) === mtime) continue;
       const had = loaded.has(id);
       // Marked even if it fails, so a broken file is retried once edited rather than every scan
       loaded.set(id, mtime);
-      changed = true;
+      dirty = true;
       try {
-        // A new query string is a new module to Bun, which is what makes edits reload
-        folder.add(id, await import(`${path}?v=${mtime}`));
+        await add(id, path);
         report(`${had ? "Reloaded" : "Loaded"} ${name}/${file}`);
       } catch (error) {
         report(
@@ -50,11 +48,11 @@ export async function watchFolder(folder: Folder) {
     for (const id of loaded.keys()) {
       if (found.has(id)) continue;
       loaded.delete(id);
-      folder.remove(id);
-      changed = true;
+      remove(id);
+      dirty = true;
       report(`Removed ${name}/${id}`);
     }
-    if (changed) await folder.changed?.();
+    if (dirty) await changed?.();
   }
 
   function rescan() {
@@ -62,17 +60,17 @@ export async function watchFolder(folder: Folder) {
     return scanning;
   }
 
-  await mkdir(folder.dir, { recursive: true });
+  await mkdir(dir, { recursive: true });
   await rescan();
   // Saves arrive as bursts of events, so wait for them to settle
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    watch(folder.dir, () => {
+    watch(dir, { recursive: true }, () => {
       clearTimeout(timer);
       timer = setTimeout(rescan, 300);
     });
   } catch (error) {
-    console.warn(`Couldn't watch ${folder.dir}, changes apply within a minute`, error);
+    console.warn(`Couldn't watch ${dir}, changes apply within a minute`, error);
   }
   // Catches what the watcher misses, like the folder being replaced by a git checkout
   setInterval(rescan, 60_000);

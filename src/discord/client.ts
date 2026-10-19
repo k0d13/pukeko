@@ -1,13 +1,19 @@
 import {
   ApplicationIntegrationType,
   type BaseInteraction,
+  type Channel,
   Client,
+  type CommandInteraction,
   GatewayIntentBits,
   InteractionContextType,
+  type MessageComponentInteraction,
+  MessageFlags,
+  type ModalSubmitInteraction,
   Partials,
-  type SendableChannels,
 } from "discord.js";
-import { deliver } from "./render.ts";
+import { deliver, type Payload } from "./render.ts";
+
+type Answerable = CommandInteraction | MessageComponentInteraction | ModalSubmitInteraction;
 
 /** Filled in once logged in */
 export const owner = { id: "" };
@@ -43,12 +49,24 @@ export function where(interaction: BaseInteraction) {
   return `${name}, ${readable ? "a channel Pukeko can read" : "a channel Pukeko can't read or post in outside this reply"}`;
 }
 
-/** Shows Pukeko typing until the returned function is called */
-export function keepTyping(channel: SendableChannels) {
-  const typing = () => channel.sendTyping().catch(() => {});
+/** Shows Pukeko typing in the channel while `work` runs */
+export async function whileTyping<T>(channel: Channel | null, work: () => Promise<T>) {
+  const typing = () => channel?.isSendable() && channel.sendTyping().catch(() => {});
   typing();
   const interval = setInterval(typing, 8000);
-  return () => clearInterval(interval);
+  try {
+    return await work();
+  } finally {
+    clearInterval(interval);
+  }
+}
+
+/** A reply only the user sees, after whatever's already been said */
+export function tell(interaction: Answerable, content: string) {
+  const reply = { content: content.slice(0, 2000), flags: MessageFlags.Ephemeral as const };
+  return interaction.replied || interaction.deferred
+    ? interaction.followUp(reply)
+    : interaction.reply(reply);
 }
 
 /** Posts to a channel, or to the owner's DMs without one */
@@ -57,9 +75,18 @@ export async function send(channelId: string | undefined, text: string) {
     ? await client.channels.fetch(channelId)
     : await (await client.users.fetch(owner.id)).createDM();
   if (!channel?.isSendable()) throw new Error(`Can't send to channel ${channelId}`);
-  await deliver(
-    text,
-    (c) => channel.send(c),
-    (c) => channel.send(c),
-  );
+  await deliver(text, (c) => channel.send(c));
+}
+
+/** Answers through the interaction, or in its channel once its 15 minute token has expired */
+export async function respond(
+  interaction: Answerable,
+  text: string,
+  first = (c: Payload) => interaction.followUp(c),
+) {
+  try {
+    await deliver(text, first, (c) => interaction.followUp(c));
+  } catch {
+    await send(interaction.channelId ?? undefined, text);
+  }
 }

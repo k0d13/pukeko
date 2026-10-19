@@ -3,7 +3,6 @@ import {
   ButtonStyle,
   ComponentType,
   type Message,
-  MessageFlags,
   ModalBuilder,
   TextInputStyle,
   type MessageComponentInteraction,
@@ -11,24 +10,24 @@ import {
 } from "discord.js";
 import { channelSession } from "#/agent/index.ts";
 import { type Entry, forget, lookup } from "./buttons.ts";
-import { keepTyping, send, where } from "./client.ts";
-import { deliver } from "./render.ts";
+import { respond, tell, whileTyping, where } from "./client.ts";
 
 const kinds = { button: "button", input: "text input", select: "select menu" };
 
-// Every custom ID among a message's components
-function customIds(message: Message) {
-  const ids: string[] = [];
+type Node = Record<string, unknown>;
+
+// Every component on a message, nested ones included
+function nodes(message: Message) {
+  const out: Node[] = [];
   function walk(node: unknown) {
     if (Array.isArray(node)) return node.forEach(walk);
     if (!node || typeof node !== "object") return;
-    const record = node as Record<string, unknown>;
-    if (typeof record.custom_id === "string") ids.push(record.custom_id);
-    walk(record.components);
-    walk(record.accessory);
+    out.push(node as Node);
+    walk((node as Node).components);
+    walk((node as Node).accessory);
   }
   walk(message.components.map((c) => c.toJSON()));
-  return ids;
+  return out;
 }
 
 // The message's components with some greyed out, ready to send back. Of those, only the one
@@ -50,7 +49,7 @@ function disable(message: Message, used: Set<string>, picked: string) {
   function walk(node: unknown): unknown {
     if (Array.isArray(node)) return node.map(walk);
     if (!node || typeof node !== "object") return node;
-    const out: Record<string, unknown> = {};
+    const out: Node = {};
     for (const [key, value] of Object.entries(node))
       out[key] =
         (key === "media" || key === "file") && value && typeof value === "object"
@@ -68,17 +67,10 @@ function disable(message: Message, used: Set<string>, picked: string) {
 
 // The message's text, so a click on an old message (or a job's) carries its context
 function excerpt(message: Message) {
-  const texts: string[] = message.content ? [message.content] : [];
-  function walk(node: unknown) {
-    if (Array.isArray(node)) return node.forEach(walk);
-    if (!node || typeof node !== "object") return;
-    const record = node as Record<string, unknown>;
-    if (record.type === ComponentType.TextDisplay && typeof record.content === "string")
-      texts.push(record.content);
-    walk(record.components);
-  }
-  walk(message.components.map((c) => c.toJSON()));
-  const text = texts.join("\n").trim();
+  const texts = nodes(message)
+    .filter((node) => node.type === ComponentType.TextDisplay)
+    .map((node) => node.content);
+  const text = [message.content, ...texts].join("\n").trim();
   return text.length > 1500 ? `${text.slice(0, 1500)}…` : text;
 }
 
@@ -98,10 +90,8 @@ function inputModal(customId: string, entry: Entry) {
 export async function handleComponent(
   interaction: MessageComponentInteraction | ModalSubmitInteraction,
 ) {
-  const id = interaction.customId.slice("pk:".length);
-  const entry = lookup(id);
-  if (!entry)
-    return interaction.reply({ content: "This has expired", flags: MessageFlags.Ephemeral });
+  const entry = lookup(interaction.customId);
+  if (!entry) return tell(interaction, "This has expired");
   if (entry.kind === "input" && interaction.isButton())
     return interaction.showModal(inputModal(interaction.customId, entry));
 
@@ -113,41 +103,20 @@ export async function handleComponent(
     detail = interaction.fields.getTextInputValue("text").trim();
 
   // Acknowledged within 3 seconds, greying out a one-time control or its whole group
-  const message = interaction.isMessageComponent()
-    ? interaction.message
-    : interaction.isFromMessage()
-      ? interaction.message
-      : undefined;
-  if (message && (entry.group || !entry.repeat)) {
-    const used = new Set(
-      entry.group
-        ? customIds(message).filter((c) => lookup(c.slice("pk:".length))?.group === entry.group)
-        : [interaction.customId],
-    );
-    used.add(interaction.customId);
-    for (const c of used) forget(c.slice("pk:".length));
-    const components = disable(message, used, interaction.customId);
+  const onMessage =
+    interaction.isMessageComponent() || interaction.isFromMessage() ? interaction : undefined;
+  const message = onMessage?.message;
+  if (onMessage && message && (entry.group || !entry.repeat)) {
+    const used = new Set([interaction.customId]);
+    if (entry.group)
+      for (const { custom_id } of nodes(message))
+        if (typeof custom_id === "string" && lookup(custom_id)?.group === entry.group)
+          used.add(custom_id);
+    used.forEach(forget);
     // A rejected edit leaves the click unanswered, so the turn still runs without it
-    try {
-      if (interaction.isMessageComponent()) await interaction.update({ components });
-      else if (interaction.isFromMessage()) await interaction.update({ components });
-    } catch (error) {
-      // What Discord gave back for the files, to see why they didn't map
-      const files: unknown[] = [];
-      function find(node: unknown) {
-        if (Array.isArray(node)) return node.forEach(find);
-        if (!node || typeof node !== "object") return;
-        const record = node as Record<string, unknown>;
-        if (record.type === ComponentType.File) files.push(record.file);
-        find(record.components);
-      }
-      find(message.components.map((c) => c.toJSON()));
-      console.warn(
-        "Couldn't grey out a used component:",
-        error instanceof Error ? error.message : error,
-        JSON.stringify({ files, attachments: message.attachments.map((a) => a.name) }),
-      );
-    }
+    await onMessage
+      .update({ components: disable(message, used, interaction.customId) })
+      .catch((error: Error) => console.warn("Couldn't grey out a used component:", error.message));
   }
   if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
 
@@ -163,24 +132,9 @@ export async function handleComponent(
     .filter(Boolean)
     .join("\n\n");
 
-  const channel = interaction.channel;
-  const stopTyping = channel?.isSendable() ? keepTyping(channel) : () => {};
-  try {
-    const session = await channelSession(interaction.channelId!);
-    const reply = await session.ask(prompt);
-    const picked = entry.kind === "select" ? `: ${detail}` : "";
-    const text = `-# ↪ ${entry.label}${picked}\n\n${reply}`;
-    try {
-      await deliver(
-        text,
-        (c) => interaction.followUp(c),
-        (c) => interaction.followUp(c),
-      );
-    } catch {
-      // Interaction tokens expire after 15 minutes, so long turns post to the channel
-      await send(interaction.channelId ?? undefined, text);
-    }
-  } finally {
-    stopTyping();
-  }
+  const reply = await whileTyping(interaction.channel, async () =>
+    (await channelSession(interaction.channelId!)).ask(prompt),
+  );
+  const picked = entry.kind === "select" ? `: ${detail}` : "";
+  await respond(interaction, `-# ↪ ${entry.label}${picked}\n\n${reply}`);
 }

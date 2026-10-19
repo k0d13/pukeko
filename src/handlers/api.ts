@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { channelSession, createSession, type Session } from "#/agent/index.ts";
+import { backgroundSession, channelSession } from "#/agent/index.ts";
+import { readJson, write } from "#/core/files.ts";
 import { paths } from "#/core/paths.ts";
 
 // What handlers get from `import ... from "pukeko"`
@@ -8,15 +9,10 @@ export { paths } from "#/core/paths.ts";
 export { client, owner, send } from "#/discord/client.ts";
 export { deliver, render } from "#/discord/render.ts";
 
-// Shared by handlers that don't name a channel, forgotten on restart like the jobs'
-let session: Session | undefined;
-
-/** An agent turn in that channel's conversation, or a conversation of the handlers' own */
+/** An agent turn in that channel's conversation, or the one jobs and handlers share */
 export async function ask(prompt: string, options: { channel?: string } = {}) {
-  const target = options.channel
-    ? await channelSession(options.channel)
-    : (session ??= createSession());
-  return target.ask(prompt);
+  const session = options.channel ? await channelSession(options.channel) : backgroundSession();
+  return session.ask(prompt);
 }
 
 function storeFile(name: string) {
@@ -26,12 +22,10 @@ function storeFile(name: string) {
 }
 
 /** State a handler keeps across reloads and restarts, or `fallback` when there's none yet */
-export async function load<T>(name: string, fallback: T): Promise<T> {
-  return Bun.file(storeFile(name))
-    .json()
-    .catch(() => fallback);
+export function load<T>(name: string, fallback: T) {
+  return readJson(storeFile(name), fallback);
 }
 
-export async function save(name: string, value: unknown) {
-  await Bun.write(storeFile(name), JSON.stringify(value));
+export function save(name: string, value: unknown) {
+  return write(storeFile(name), JSON.stringify(value));
 }

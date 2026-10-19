@@ -8,17 +8,17 @@ the basics from `templates/`; personality, integrations and jobs are yours to ad
 ## How it works
 
 - `src/cli/`: the `pukeko` command (`index.ts`), one file per subcommand: `start` (the default), `init`, `service`, `restart`, `logs` and `upgrade`.
-- `src/core/`: workspace paths (`--workspace DIR`, `$PUKEKO_WORKSPACE`, or `~/.pukeko/workspace`), config from `pukeko.toml` and `.env` and release info. Secrets are kept out of the agent's environment; it sources `.env` when a command needs them.
-- `src/agent/`: conversations, resumed across restarts (`/new` starts a fresh one). One per channel or one shared, per `[conversations] scope`; jobs get their own that lasts until restart.
+- `src/core/`: workspace paths (`--workspace DIR`, `$PUKEKO_WORKSPACE`, or `~/.pukeko/workspace`), config from `pukeko.toml` and `.env`, release info, and the folder watcher jobs, triggers and commands share (`watch.ts`), which logs loads and failures to `logs/pukeko.log` for the agent to read. Secrets are kept out of the agent's environment; it sources `.env` when a command needs them.
+- `src/agent/`: conversations, resumed across restarts (`/new` starts a fresh one). One per channel or one shared, per `[conversations] scope`; jobs and handlers share one that lasts until restart.
   Uses the server's `claude`, loads the workspace's `CLAUDE.md`, `.claude/`, and `.mcp.json` (`${VAR}` filled from `.env`).
   Blocks reading `.pukeko/` through settings the workspace can't override, plus an OS sandbox for Bash.
-- `src/discord/`: replies to the owner (from `pukeko.toml`, or the Discord application owner) in DMs, on @mention, and via `/ask`, `/new` (optionally switching model or effort), `/stop`, `/compact` and `/usage`.
+- `src/discord/`: replies to the owner (from `pukeko.toml`, or the Discord application owner) in DMs, on @mention, and via `/ask`, `/new` (optionally switching model or effort), `/stop`, `/compact` and `/usage`, all in one registry with the workspace's commands (`commands.ts`).
   Replies are markdown plus directives (`markup.ts`, documented for the agent in `prompt.md`), rendered as Components v2 messages (`render.ts`) with inline images, files, boxes, buttons, text inputs and selects.
   Each button carries a prompt the agent wrote; a click (`clicks.ts`) sends it as a new turn in that channel's conversation. They're kept in `.pukeko/buttons.json` (`buttons.ts`) for 90 days.
-- `src/jobs.ts`: runs `jobs/<id>/job.md` on cron or one-off schedules; rescans every minute.
-- `src/handlers/`: agent-written `triggers/*.ts` (discord.js event listeners) and `commands/*.ts` (slash and context menu commands), imported into the harness and reloaded as the files change (`folder.ts`).
+- `src/jobs.ts`: runs `jobs/<id>/job.md` on cron or one-off schedules, rescheduling them as the files change.
+- `src/handlers/`: agent-written `triggers/*.ts` (discord.js event listeners) and `commands/*.ts` (slash and context menu commands), imported into the harness and reloaded as the files change.
   They import `discord.js` and a `pukeko` module (`api.ts`: `ask`, `send`, `render`, `load`/`save` state) as Bun virtual modules, so the workspace needs no `node_modules`.
-  Load errors and crashes go to `logs/handlers.log` for the agent to read. This code runs unsandboxed in the harness process, so it can reach `.env` and `.pukeko/`.
+  This code runs unsandboxed in the harness process, so it can reach `.env` and `.pukeko/`.
 - `src/agent/prompt.md`: the harness rules appended to Claude Code's system prompt.
 
 ## Build

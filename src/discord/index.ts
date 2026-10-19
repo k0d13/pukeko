@@ -1,50 +1,20 @@
-import {
-  type CommandInteraction,
-  Events,
-  type Interaction,
-  type MessageComponentInteraction,
-  MessageFlags,
-  type ModalSubmitInteraction,
-} from "discord.js";
-import { channelSession } from "#/agent/index.ts";
+import { Events, type Interaction } from "discord.js";
 import { config, secrets } from "#/core/config.ts";
-import { handleCustom } from "#/handlers/index.ts";
-import * as ask from "./ask.ts";
+import { handleMessage } from "./ask.ts";
 import { loadButtons } from "./buttons.ts";
 import { handleComponent } from "./clicks.ts";
-import { client, owner } from "./client.ts";
-import * as conversation from "./conversation.ts";
+import { client, owner, tell } from "./client.ts";
+import { runCommand } from "./commands.ts";
 
-export { send } from "./client.ts";
-
-const askNames = new Set(ask.commands.map((command) => command.name));
-
-function notYours(
-  interaction: CommandInteraction | MessageComponentInteraction | ModalSubmitInteraction,
-) {
-  return interaction.reply({ content: "Not yours 🐦", flags: MessageFlags.Ephemeral });
-}
-
-async function handleInteraction(interaction: Interaction) {
-  // The workspace's own commands, which decide for themselves who can use them
-  if (await handleCustom(interaction)) return;
-  if (interaction.isAutocomplete()) return conversation.autocomplete(interaction);
-  // Other modals, like Ask Pukeko's, are awaited where they're shown
-  if (interaction.isMessageComponent() || interaction.isModalSubmit()) {
-    if (!interaction.customId.startsWith("pk:")) return;
-    if (interaction.user.id !== owner.id) return notYours(interaction);
-    return handleComponent(interaction);
-  }
-  if (!interaction.isChatInputCommand() && !interaction.isMessageContextMenuCommand()) return;
-  if (interaction.user.id !== owner.id) return notYours(interaction);
-
-  const session = await channelSession(interaction.channelId);
-  if (askNames.has(interaction.commandName)) return ask.handle(interaction, session);
-  if (interaction.isChatInputCommand()) return conversation.handle(interaction, session);
+function handleInteraction(interaction: Interaction) {
+  const component = interaction.isMessageComponent() || interaction.isModalSubmit();
+  if (!component || !interaction.customId.startsWith("pk:")) return runCommand(interaction);
+  if (interaction.user.id !== owner.id) return tell(interaction, "Not yours 🐦");
+  return handleComponent(interaction);
 }
 
 client.on(Events.MessageCreate, (message) => {
-  ask.handleMessage(message).catch(console.error);
+  handleMessage(message).catch(console.error);
 });
 client.on(Events.InteractionCreate, (interaction) => {
   handleInteraction(interaction).catch(console.error);
@@ -61,6 +31,5 @@ export async function startDiscord() {
   owner.id =
     config.owner || ((appOwner && "ownerId" in appOwner ? appOwner.ownerId : appOwner?.id) ?? "");
   if (!owner.id) throw new Error("Couldn't find the application's owner, set owner in pukeko.toml");
-  // Commands are registered by startHandlers, once the workspace's are loaded too
   console.log(`Logged in as ${client.user!.tag}, answering to ${owner.id}`);
 }

@@ -7,6 +7,7 @@ import {
   type SDKRateLimitInfo,
 } from "@anthropic-ai/claude-agent-sdk";
 import { config, secrets } from "#/core/config.ts";
+import { readJson, write } from "#/core/files.ts";
 import { paths } from "#/core/paths.ts";
 import harnessPrompt from "./prompt.md" with { type: "text" };
 
@@ -102,13 +103,9 @@ export function createSession(file?: string, saved?: Partial<State>) {
   let queue = Promise.resolve();
   // Bumped by restart() so a turn already in flight can't save its ID afterwards
   let generation = 0;
-  // Chained so an older state never lands after a newer one
-  let saving = Promise.resolve();
 
   function save() {
-    if (!file) return;
-    const json = JSON.stringify(state);
-    saving = saving.then(() => Bun.write(file, json)).then(() => {}, console.error);
+    if (file) void write(file, JSON.stringify(state));
   }
 
   function restart(setup: Partial<Setup> = {}) {
@@ -206,13 +203,15 @@ export function channelSession(channelId: string) {
   let session = sessions.get(name);
   if (!session) {
     const file = join(paths.state, `${name}.json`);
-    session = Bun.file(file)
-      .json()
-      .catch((error) => {
-        if (error?.code !== "ENOENT") console.warn(`Couldn't read ${file}, starting fresh`, error);
-      })
-      .then((saved: Partial<State> | undefined) => createSession(file, saved));
+    session = readJson<Partial<State>>(file, {}).then((saved) => createSession(file, saved));
     sessions.set(name, session);
   }
   return session;
+}
+
+let background: Session | undefined;
+
+/** Shared by jobs and handlers, kept out of the chats and forgotten on restart */
+export function backgroundSession() {
+  return (background ??= createSession());
 }

@@ -10,17 +10,14 @@ import {
   type MessageContextMenuCommandInteraction,
   type ModalSubmitInteraction,
 } from "discord.js";
-import { channelSession, type Session } from "#/agent/index.ts";
-import { client, keepTyping, owner, send, where } from "./client.ts";
+import { channelSession } from "#/agent/index.ts";
+import { client, owner, respond, whileTyping, where } from "./client.ts";
+import type { Command } from "./commands.ts";
 import { deliver } from "./render.ts";
 
-export const commands = [
-  new SlashCommandBuilder()
-    .setName("ask")
-    .setDescription("Ask Pukeko something")
-    .addStringOption((o) => o.setName("prompt").setDescription("What to ask").setRequired(true)),
-  new ContextMenuCommandBuilder().setName("Ask Pukeko").setType(ApplicationCommandType.Message),
-];
+function attachments(message: Message) {
+  return message.attachments.map((a) => `\n[Attachment: ${a.name} ${a.url}]`).join("");
+}
 
 async function describe(message: Message) {
   const where =
@@ -28,7 +25,7 @@ async function describe(message: Message) {
       ? "DM"
       : `#${"name" in message.channel ? message.channel.name : message.channelId}`;
   let text = message.content.replaceAll(new RegExp(`<@!?${client.user!.id}>`, "g"), "").trim();
-  for (const a of message.attachments.values()) text += `\n[Attachment: ${a.name} ${a.url}]`;
+  text += attachments(message);
   const ref = message.reference?.messageId && (await message.fetchReference().catch(() => null));
   if (ref) text = `[Replying to ${ref.author.username}: ${ref.content}]\n\n${text}`;
   return `[Discord message from owner in ${where}, a channel Pukeko can read]\n${text}`;
@@ -39,52 +36,36 @@ export async function handleMessage(message: Message) {
   if (message.author.id !== owner.id) return;
   if (message.channel.type !== ChannelType.DM && !message.mentions.users.has(client.user!.id))
     return;
-  if (!message.channel.isSendable()) return;
-
   const channel = message.channel;
-  const stopTyping = keepTyping(channel);
-  try {
-    const session = await channelSession(message.channelId);
-    const reply = await session.ask(await describe(message));
-    await deliver(
-      reply,
-      (c) => message.reply(c),
-      (c) => channel.send(c),
-    );
-  } finally {
-    stopTyping();
-  }
+  if (!channel.isSendable()) return;
+  const reply = await whileTyping(channel, async () =>
+    (await channelSession(message.channelId)).ask(await describe(message)),
+  );
+  await deliver(
+    reply,
+    (c) => message.reply(c),
+    (c) => channel.send(c),
+  );
 }
 
 async function answer(
   interaction: ChatInputCommandInteraction | ModalSubmitInteraction,
-  session: Session,
   prompt: string,
   quote: string,
 ) {
   await interaction.deferReply();
-  const reply = await session.ask(prompt);
-  const text = `${quote}\n\n${reply}`;
-  try {
-    await deliver(
-      text,
-      (c) => interaction.editReply(c),
-      (c) => interaction.followUp(c),
-    );
-  } catch {
-    // Interaction tokens expire after 15 minutes, so long turns post to the channel
-    await send(interaction.channelId ?? undefined, text);
-  }
+  const reply = await (await channelSession(interaction.channelId!)).ask(prompt);
+  await respond(interaction, `${quote}\n\n${reply}`, (c) => interaction.editReply(c));
 }
 
-function handleAsk(interaction: ChatInputCommandInteraction, session: Session) {
+function handleAsk(interaction: ChatInputCommandInteraction) {
   const prompt = interaction.options.getString("prompt", true);
   const header = `[Discord /ask from owner in ${where(interaction)}]`;
-  return answer(interaction, session, `${header}\n${prompt}`, `> ${prompt}`);
+  return answer(interaction, `${header}\n${prompt}`, `> ${prompt}`);
 }
 
 // As a user app the bot can't read channels, so the message comes in through the command
-async function handleAskAbout(interaction: MessageContextMenuCommandInteraction, session: Session) {
+async function handleAskAbout(interaction: MessageContextMenuCommandInteraction) {
   const target = interaction.targetMessage;
   const id = `ask-about:${interaction.id}`;
   await interaction.showModal(
@@ -109,24 +90,31 @@ async function handleAskAbout(interaction: MessageContextMenuCommandInteraction,
     .catch(() => null);
   if (!submit) return;
   const prompt = submit.fields.getTextInputValue("prompt").trim();
-  let content = target.content;
-  for (const a of target.attachments.values()) content += `\n[Attachment: ${a.name} ${a.url}]`;
+  let content = target.content + attachments(target);
   for (const e of target.embeds)
     content += `\n[Embed: ${[e.title, e.description, e.url].filter(Boolean).join(" ")}]`;
   const header = `[Message from ${target.author.username} at ${target.createdAt.toISOString()}]`;
   return answer(
     submit,
-    session,
     `[Discord "Ask Pukeko" on a message, from owner in ${where(interaction)}]\n${header}\n${content.trim()}\n\n${prompt || "(no prompt, respond to the message)"}`,
     `-# Re: ${target.url}${prompt ? `\n> ${prompt}` : ""}`,
   );
 }
 
-export function handle(
-  interaction: ChatInputCommandInteraction | MessageContextMenuCommandInteraction,
-  session: Session,
-) {
-  return interaction.isMessageContextMenuCommand()
-    ? handleAskAbout(interaction, session)
-    : handleAsk(interaction, session);
-}
+export const commands: Command[] = [
+  {
+    data: new SlashCommandBuilder()
+      .setName("ask")
+      .setDescription("Ask Pukeko something")
+      .addStringOption((o) => o.setName("prompt").setDescription("What to ask").setRequired(true))
+      .toJSON(),
+    run: handleAsk,
+  },
+  {
+    data: new ContextMenuCommandBuilder()
+      .setName("Ask Pukeko")
+      .setType(ApplicationCommandType.Message)
+      .toJSON(),
+    run: handleAskAbout,
+  },
+];

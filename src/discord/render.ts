@@ -63,12 +63,14 @@ function isUrl(src: string) {
   return /^https?:\/\//i.test(src);
 }
 
+function piece(build: Piece["build"], files: string[] = [], components = 1): Piece {
+  return { chars: 0, components, files, build };
+}
+
 function textPieces(text: string): Piece[] {
   return chunks(text, 3500).map((content) => ({
+    ...piece(() => new TextDisplayBuilder().setContent(content)),
     chars: content.length,
-    components: 1,
-    files: [],
-    build: () => new TextDisplayBuilder().setContent(content),
   }));
 }
 
@@ -84,7 +86,7 @@ function button(action: Action) {
     ...(action.group && { group: action.group }),
     ...(action.kind === "input" && action.placeholder && { placeholder: action.placeholder }),
   });
-  return out.setCustomId(`pk:${id}`).setStyle(buttonStyles[action.style ?? "secondary"]);
+  return out.setCustomId(id).setStyle(buttonStyles[action.style ?? "secondary"]);
 }
 
 /** Pieces for a block, with any files it names that don't exist */
@@ -104,18 +106,18 @@ function pieces(block: Block, missing: string[]): Piece[] {
       const out: Piece[] = [];
       for (let i = 0; i < items.length; i += 10) {
         const group = items.slice(i, i + 10);
-        out.push({
-          chars: 0,
-          components: 1,
-          files: group.map((item) => item.src).filter((src) => !isUrl(src)),
-          build: (attach) =>
-            new MediaGalleryBuilder().addItems(
-              group.map((item) => (g) => {
-                g.setURL(isUrl(item.src) ? item.src : attach(item.src)).setSpoiler(item.spoiler);
-                return item.alt ? g.setDescription(item.alt.slice(0, 1024)) : g;
-              }),
-            ),
-        });
+        out.push(
+          piece(
+            (attach) =>
+              new MediaGalleryBuilder().addItems(
+                group.map((item) => (g) => {
+                  g.setURL(isUrl(item.src) ? item.src : attach(item.src)).setSpoiler(item.spoiler);
+                  return item.alt ? g.setDescription(item.alt.slice(0, 1024)) : g;
+                }),
+              ),
+            group.map((item) => item.src).filter((src) => !isUrl(src)),
+          ),
+        );
       }
       return out;
     }
@@ -124,36 +126,31 @@ function pieces(block: Block, missing: string[]): Piece[] {
       if (isUrl(block.src)) return textPieces(block.src);
       if (!local(block.src)) return [];
       return [
-        {
-          chars: 0,
-          components: 1,
-          files: [block.src],
-          build: (attach) => new FileBuilder().setURL(attach(block.src)).setSpoiler(block.spoiler),
-        },
+        piece(
+          (attach) => new FileBuilder().setURL(attach(block.src)).setSpoiler(block.spoiler),
+          [block.src],
+        ),
       ];
     case "separator":
       return [
-        {
-          chars: 0,
-          components: 1,
-          files: [],
-          build: () =>
-            new SeparatorBuilder()
-              .setDivider(block.divider)
-              .setSpacing(block.large ? SeparatorSpacingSize.Large : SeparatorSpacingSize.Small),
-        },
+        piece(() =>
+          new SeparatorBuilder()
+            .setDivider(block.divider)
+            .setSpacing(block.large ? SeparatorSpacingSize.Large : SeparatorSpacingSize.Small),
+        ),
       ];
     case "actions": {
       const out: Piece[] = [];
       for (let i = 0; i < block.actions.length; i += 5) {
         // Registered now, so a button keeps one ID however the reply is split
         const buttons = block.actions.slice(i, i + 5).map(button);
-        out.push({
-          chars: 0,
-          components: 1 + buttons.length,
-          files: [],
-          build: () => new ActionRowBuilder<ButtonBuilder>().addComponents(buttons),
-        });
+        out.push(
+          piece(
+            () => new ActionRowBuilder<ButtonBuilder>().addComponents(buttons),
+            [],
+            1 + buttons.length,
+          ),
+        );
       }
       return out;
     }
@@ -168,7 +165,7 @@ function pieces(block: Block, missing: string[]): Piece[] {
         ...(block.group && { group: block.group }),
       });
       const menu = new StringSelectMenuBuilder()
-        .setCustomId(`pk:${id}`)
+        .setCustomId(id)
         .setPlaceholder(block.placeholder.slice(0, 150))
         .setMaxValues(block.multiple ? options.length : 1)
         .addOptions(
@@ -180,12 +177,7 @@ function pieces(block: Block, missing: string[]): Piece[] {
           })),
         );
       return [
-        {
-          chars: 0,
-          components: 2,
-          files: [],
-          build: () => new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu),
-        },
+        piece(() => new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu), [], 2),
       ];
     }
     case "box":
@@ -279,7 +271,7 @@ export function render(reply: string): Payload[] {
 export async function deliver(
   reply: string,
   first: (payload: Payload) => Promise<unknown>,
-  rest: (payload: Payload) => Promise<unknown>,
+  rest = first,
 ) {
   let post = first;
   async function next(payload: Payload) {

@@ -7,27 +7,19 @@
 
 export type Style = "primary" | "secondary" | "success" | "danger";
 
+type Control = {
+  label: string;
+  prompt: string;
+  style?: Style;
+  emoji?: string;
+  repeat: boolean;
+  /** Using one control in a group greys out the rest of it on that message */
+  group?: string;
+};
+
 export type Action =
-  | {
-      kind: "button";
-      label: string;
-      prompt: string;
-      style?: Style;
-      emoji?: string;
-      repeat: boolean;
-      /** Using one control in a group greys out the rest of it on that message */
-      group?: string;
-    }
-  | {
-      kind: "input";
-      label: string;
-      prompt: string;
-      placeholder?: string;
-      style?: Style;
-      emoji?: string;
-      repeat: boolean;
-      group?: string;
-    }
+  | ({ kind: "button" } & Control)
+  | ({ kind: "input"; placeholder?: string } & Control)
   | { kind: "link"; label: string; url: string; emoji?: string };
 
 export type Option = { label: string; description?: string; emoji?: string };
@@ -150,11 +142,17 @@ export function parse(reply: string) {
     if (value) target().push({ type: "text", text: value });
   }
 
-  // Images and actions join the block before them when only blank lines are between
-  function push(block: Block | Action) {
+  // Ends the text so far, saying whether there was any
+  function settle() {
     const blank = !text.some((line) => line.trim());
     if (blank) text = [];
     else flush();
+    return blank;
+  }
+
+  // Images and actions join the block before them when only blank lines are between
+  function push(block: Block | Action) {
+    const blank = settle();
     const blocks = target();
     const last = blocks.at(-1);
     if ("kind" in block) {
@@ -203,9 +201,7 @@ export function parse(reply: string) {
           continue;
         }
         rich = true;
-        const blank = !text.some((l) => l.trim());
-        if (blank) text = [];
-        else flush();
+        settle();
         select = {
           type: "select",
           placeholder: label || "Choose",
