@@ -12,6 +12,8 @@ export type Session = ReturnType<typeof createSession>;
 export type Setup = { model: string; effort: EffortLevel | "" };
 // `last` is when its last turn finished, for the idle timeout
 type State = Setup & { id: string; last?: number };
+/** Gets the text written before each tool call, as it happens */
+export type OnUpdate = (text: string) => Promise<unknown>;
 
 const log = logger("agent");
 const warned = new Set<string>();
@@ -112,12 +114,26 @@ export function createSession(name: string, file?: string, saved?: Partial<State
     save();
   }
 
-  async function runTurn(prompt: string): Promise<string> {
+  async function runTurn(prompt: string, onUpdate?: OnUpdate): Promise<string> {
     const abort = (current = new AbortController());
     const turnGeneration = generation;
     const resuming = Boolean(state.id);
     let started = false;
     let reply = "";
+    // Text waits until a tool call shows it isn't the final reply, which the result carries
+    let pending = "";
+    let updates = Promise.resolve();
+    const flush = () => {
+      const text = pending.trim();
+      pending = "";
+      if (!text || !onUpdate) return;
+      updates = updates.then(() =>
+        onUpdate(text).then(
+          () => {},
+          (error) => log.warn(`${name}: couldn't post an update`, error),
+        ),
+      );
+    };
     const begun = Date.now();
     log.info(
       `${name}: turn started, ${resuming ? `resuming ${state.id.slice(0, 8)}` : "new conversation"}, ${state.model || "default model"}${state.effort ? `, ${state.effort} effort` : ""}: ${preview(prompt)}`,
@@ -134,8 +150,11 @@ export function createSession(name: string, file?: string, saved?: Partial<State
           save();
         } else if (message.type === "assistant") {
           for (const block of message.message.content)
-            if (block.type === "tool_use")
+            if (block.type === "text") pending += `\n\n${block.text}`;
+            else if (block.type === "tool_use") {
+              flush();
               log.info(`${name}: ${block.name}${target(block.input as Record<string, unknown>)}`);
+            }
         } else if (message.type === "result") {
           reply =
             message.subtype === "success"
@@ -162,11 +181,13 @@ export function createSession(name: string, file?: string, saved?: Partial<State
       if (resuming && !started) {
         log.warn(`${name}: couldn't resume ${state.id}, starting a new conversation`);
         restart();
-        return runTurn(prompt);
+        return runTurn(prompt, onUpdate);
       }
       return `⚠️ ${error instanceof Error ? error.message : error}`;
     } finally {
       current = undefined;
+      // So the reply never lands before an update
+      await updates;
     }
   }
 
@@ -180,8 +201,8 @@ export function createSession(name: string, file?: string, saved?: Partial<State
     return `[New conversation: the last one here went quiet for over ${config.conversations.idle}]\n\n${prompt}`;
   }
 
-  function enqueue(prompt: string) {
-    const turn = queue.then(() => runTurn(freshIfIdle(prompt)));
+  function enqueue(prompt: string, onUpdate?: OnUpdate) {
+    const turn = queue.then(() => runTurn(freshIfIdle(prompt), onUpdate));
     queue = turn.then(() => {});
     return turn;
   }
@@ -190,8 +211,9 @@ export function createSession(name: string, file?: string, saved?: Partial<State
     get setup(): Setup {
       return { model: state.model, effort: state.effort };
     },
-    ask(text: string) {
-      return enqueue(`${text}\n\n[Current time: ${now()}]`);
+    /** `onUpdate` posts progress as the turn goes; without it only the reply comes back */
+    ask(text: string, onUpdate?: OnUpdate) {
+      return enqueue(`${text}\n\n[Current time: ${now()}]`, onUpdate);
     },
     /** Whether there was a turn to stop */
     stop() {

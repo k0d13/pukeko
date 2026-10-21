@@ -12,9 +12,8 @@ import {
 } from "discord.js";
 import { channelSession } from "#/agent/index.ts";
 import { logger, preview } from "#/core/log.ts";
-import { client, owner, respond, whileTyping, where } from "./client.ts";
+import { client, owner, poster, responder, whileTyping, where } from "./client.ts";
 import type { Command } from "./commands.ts";
-import { deliver } from "./render.ts";
 
 const log = logger("discord");
 
@@ -45,14 +44,14 @@ export async function handleMessage(message: Message) {
   log.info(
     `Message in ${"name" in channel ? `#${channel.name}` : "DM"}${files}: ${preview(message.content)}`,
   );
-  const reply = await whileTyping(channel, async () =>
-    (await channelSession(message.channelId)).ask(await describe(message)),
-  );
-  await deliver(
-    reply,
+  const post = poster(
     (c) => message.reply(c),
     (c) => channel.send(c),
   );
+  const reply = await whileTyping(channel, async () =>
+    (await channelSession(message.channelId)).ask(await describe(message), post),
+  );
+  await post(reply);
 }
 
 async function answer(
@@ -61,8 +60,9 @@ async function answer(
   quote: string,
 ) {
   await interaction.deferReply();
-  const reply = await (await channelSession(interaction.channelId!)).ask(prompt);
-  await respond(interaction, `${quote}\n\n${reply}`, (c) => interaction.editReply(c));
+  const post = responder(interaction, `${quote}\n\n`, (c) => interaction.editReply(c));
+  const reply = await (await channelSession(interaction.channelId!)).ask(prompt, post);
+  await post(reply);
 }
 
 function handleAsk(interaction: ChatInputCommandInteraction) {

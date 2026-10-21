@@ -11,7 +11,7 @@ import {
 import { channelSession } from "#/agent/index.ts";
 import { logger, preview } from "#/core/log.ts";
 import { type Entry, forget, lookup } from "./buttons.ts";
-import { respond, tell, whileTyping, where } from "./client.ts";
+import { responder, tell, whileTyping, where } from "./client.ts";
 
 const log = logger("discord");
 const kinds = { button: "button", input: "text input", select: "select menu" };
@@ -138,9 +138,10 @@ export async function handleComponent(
     .filter(Boolean)
     .join("\n\n");
 
-  const reply = await whileTyping(interaction.channel, async () =>
-    (await channelSession(interaction.channelId!)).ask(prompt),
-  );
   const picked = entry.kind === "select" ? `: ${detail}` : "";
-  await respond(interaction, `-# ↪ ${entry.label}${picked}\n\n${reply}`);
+  const post = responder(interaction, `-# ↪ ${entry.label}${picked}\n\n`);
+  const reply = await whileTyping(interaction.channel, async () =>
+    (await channelSession(interaction.channelId!)).ask(prompt, post),
+  );
+  await post(reply);
 }

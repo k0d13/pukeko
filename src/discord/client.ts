@@ -82,11 +82,35 @@ export async function send(channelId: string | undefined, text: string) {
 export async function respond(
   interaction: Answerable,
   text: string,
-  first = (c: Payload) => interaction.followUp(c),
+  first: (c: Payload) => Promise<unknown> = (c) => interaction.followUp(c),
 ) {
   try {
     await deliver(text, first, (c) => interaction.followUp(c));
   } catch {
     await send(interaction.channelId ?? undefined, text);
   }
+}
+
+/** Posts a turn's updates and then its reply, the first through `first` and the rest via `rest` */
+export function poster(first: (c: Payload) => Promise<unknown>, rest = first) {
+  let opened = false;
+  return (text: string) => {
+    const via = opened ? rest : first;
+    opened = true;
+    return deliver(text, via, rest);
+  };
+}
+
+/** Like poster, but through an interaction, with `prefix` on the first post only */
+export function responder(
+  interaction: Answerable,
+  prefix = "",
+  first?: (c: Payload) => Promise<unknown>,
+) {
+  let opened = false;
+  return (text: string) => {
+    const [head, via] = opened ? [text, undefined] : [`${prefix}${text}`, first];
+    opened = true;
+    return respond(interaction, head, via);
+  };
 }
