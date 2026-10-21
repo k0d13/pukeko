@@ -93,8 +93,9 @@ Triggers and commands:
   }
   ```
 - Imports: `discord.js` (the harness's copy, all of it), `node:` modules, Bun's APIs, relative files, and `pukeko`, which gives `client`, `owner` (`owner.id`), `config`, `paths`, plus:
-  - `ask(prompt, { channel })`: runs a turn and returns your reply text. With a channel ID it joins that channel's conversation; without one it uses the jobs' conversation.
-  - `send(channelId, markup)`: posts to a channel (or the owner's DMs with `undefined`), rendering reply markup like your own replies. `render(markup)` gives the message payloads instead, for `interaction.reply` and the like.
+  - `ask(prompt, { channel, onUpdate, images, fold })`: runs a turn and returns your reply text. With a channel ID it joins that channel's conversation; without one it uses the jobs' conversation. Optional: `onUpdate(text)` gets your progress notes as the turn goes (pass `(t) => deliver(t, ...)` to post them), `images` from `attachments(message)`, and `fold: true` (needs `channel`) to feed the prompt into a turn already running there, like a mention; that ask then gets the reply and the earlier ones get "".
+  - `attachments(message)`: `{ images, text }`, the message's images ready for `ask` and a line per attachment plus the contents of small text files, to add to the prompt.
+  - `send(channelId, markup)`: posts to a channel (or the owner's DMs with `undefined`), rendering reply markup like your own replies. `render(markup)` gives the message payloads instead, for `interaction.reply` and the like, and `deliver(markup, first, rest?)` posts it through your own functions (e.g. `message.reply` for the first payload, `channel.send` after).
   - `load(name, fallback)` and `save(name, value)`: JSON state that survives reloads and restarts.
 - Only top-level files are loaded; put shared helpers in a subfolder. Saving a file reloads it within a second, and deleting it unloads it, but editing a helper doesn't reload what imports it.
 - After writing or editing one, check `logs/pukeko.log`: it says whether it loaded, why not if it didn't (the previous version keeps running), and anything a handler threw.

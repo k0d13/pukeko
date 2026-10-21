@@ -1,18 +1,27 @@
 import { join } from "node:path";
-import { backgroundSession, channelSession } from "#/agent/index.ts";
+import { backgroundSession, type Image, type OnUpdate } from "#/agent/index.ts";
 import { readJson, write } from "#/core/files.ts";
 import { paths } from "#/core/paths.ts";
+import { chatTurn } from "#/discord/restart.ts";
 
 // What handlers get from `import ... from "pukeko"`
 export { config } from "#/core/config.ts";
 export { paths } from "#/core/paths.ts";
 export { client, owner, send } from "#/discord/client.ts";
+export { attachments } from "#/discord/ask.ts";
 export { deliver, render } from "#/discord/render.ts";
 
-/** An agent turn in that channel's conversation, or the one jobs and handlers share */
-export async function ask(prompt: string, options: { channel?: string } = {}) {
-  const session = options.channel ? await channelSession(options.channel) : backgroundSession();
-  return session.ask(prompt);
+type AskOptions = { channel?: string; onUpdate?: OnUpdate; images?: Image[]; fold?: boolean };
+
+/**
+ * An agent turn in that channel's conversation, or the one jobs and handlers share. `onUpdate` gets
+ * the progress notes as the turn goes. `fold` (needs `channel`) feeds the prompt into a turn
+ * already running there, like a mention does; this ask then gets the reply and the earlier ones ""
+ */
+export async function ask(prompt: string, { channel, onUpdate, images, fold }: AskOptions = {}) {
+  if (channel) return chatTurn(channel, prompt, onUpdate, { fold, images });
+  if (fold) throw new Error("ask: fold needs a channel");
+  return backgroundSession().ask(prompt, onUpdate, undefined, images);
 }
 
 function storeFile(name: string) {

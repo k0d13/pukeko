@@ -52,7 +52,7 @@ async function download(a: Attachment) {
  * contents of any text files. Those are labelled by author, as they're untrusted unless the
  * owner's
  */
-async function attachments(message: Message) {
+export async function attachments(message: Message) {
   const images: Image[] = [];
   let text = "";
   let contents = "";
