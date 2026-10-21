@@ -13,7 +13,7 @@ the basics from `templates/`; personality, integrations and jobs are yours to ad
   Uses the server's `claude`, loads the workspace's `CLAUDE.md`, `.claude/`, and `.mcp.json` (`${VAR}` filled from `.env`).
   Blocks reading `.pukeko/` through settings the workspace can't override, plus an OS sandbox for Bash.
 - `src/discord/`: replies to the owner (from `pukeko.toml`, or the Discord application owner) in DMs, on @mention, and via `/ask`, `/new` (optionally switching model or effort), and `/stop`, all in one registry with the workspace's commands (`commands.ts`).
-  When stopped within 10 minutes of a chat, it says it's back up (and the version) there on restart, and gives a turn the restart cut off another go (`restart.ts`).
+  When stopped within 10 minutes of a chat, it says it's back up (and the version) there on restart, and gives a turn the restart cut off another go (`restart.ts`). `pukeko service restart --after-turn` and `pukeko upgrade --after-turn` (for the agent, which can't restart the service it runs in without killing its own turn) send the service `SIGUSR2`: it waits for running turns to finish and their replies to post, then exits for systemd to bring it back, so no turn counts as cut off.
   Messages sent in a chat while a turn is running there are fed into it rather than waiting their turn, and the reply goes to the latest.
   Image attachments (PNG, JPEG, GIF, WebP up to 3.75 MB) go straight into the prompt; other files come through as links.
   Replies are markdown plus directives (`markup.ts`, documented for the agent in `prompt.md`), rendered as Components v2 messages (`render.ts`) with inline images, files, boxes, buttons, text inputs and selects.

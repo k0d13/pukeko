@@ -12,9 +12,12 @@ type Note = { channel: string; version: string; cutOff: boolean };
 const log = logger("discord");
 // A restart this soon after a chat turn was most likely asked for there
 const recent = 10 * 60_000;
+const settle = 5000;
 const running = new Map<string, number>();
 // Channels finishing a cut-off turn, so a turn that keeps restarting Pukeko only gets one more go
 const retrying = new Set<string>();
+// Set by `pukeko service restart --after-turn`: stop once no turn is running
+let restartWhenIdle = false;
 let last: { channel: string; at: number } | undefined;
 
 function file() {
@@ -39,7 +42,16 @@ export async function chatTurn(
     running.set(channel, running.get(channel)! - 1);
     if (!running.get(channel)) running.delete(channel);
     last = { channel, at: Date.now() };
+    if (restartWhenIdle) void restartIfIdle();
   }
+}
+
+// The turn's reply is posted by its caller just after `chatTurn` returns, so give it a moment
+// before stopping, and carry on waiting if another turn started in the meantime
+async function restartIfIdle() {
+  await Bun.sleep(settle);
+  if (running.size) return;
+  void shutdown("SIGUSR2");
 }
 
 // Turns cut off by the shutdown, or else the channel that just talked to Pukeko
@@ -61,6 +73,18 @@ async function shutdown(signal: string) {
 export function noteRestarts() {
   for (const signal of ["SIGTERM", "SIGINT"] as const)
     process.once(signal, () => void shutdown(signal));
+  // From `pukeko service restart --after-turn` and `pukeko upgrade --after-turn`. Stopping exits
+  // cleanly, which the service's `Restart=always` brings back up, on the new binary if upgraded
+  process.on("SIGUSR2", () => {
+    if (restartWhenIdle) return;
+    restartWhenIdle = true;
+    log.info(
+      running.size
+        ? `Will restart once ${running.size} running turns finish`
+        : "Will restart in a moment",
+    );
+    void restartIfIdle();
+  });
 }
 
 /** Says Pukeko's back where it was last talked to, and finishes any turn the restart cut off */
