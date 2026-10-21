@@ -10,6 +10,7 @@ import {
   type MessageContextMenuCommandInteraction,
   type ModalSubmitInteraction,
 } from "discord.js";
+import type { Image } from "#/agent/index.ts";
 import { logger, preview } from "#/core/log.ts";
 import { client, owner, poster, responder, whileTyping, where } from "./client.ts";
 import type { Command } from "./commands.ts";
@@ -17,8 +18,30 @@ import { chatTurn } from "./restart.ts";
 
 const log = logger("discord");
 
-function attachments(message: Message) {
-  return message.attachments.map((a) => `\n[Attachment: ${a.name} ${a.url}]`).join("");
+// The API's image types, and its 5 MB per-image limit once base64 grows it by a third;
+// anything else stays a link to download
+const imageTypes = new Set<string>(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const maxImage = 3.75 * 1024 * 1024;
+
+/** The message's images, base64 for the prompt, and lines listing every attachment */
+async function attachments(message: Message) {
+  const images: Image[] = [];
+  let text = "";
+  for (const a of message.attachments.values()) {
+    let inline = false;
+    if (a.contentType && imageTypes.has(a.contentType.split(";")[0]!) && a.size <= maxImage)
+      try {
+        const response = await fetch(a.url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = Buffer.from(await response.arrayBuffer()).toString("base64");
+        images.push({ mediaType: a.contentType.split(";")[0] as Image["mediaType"], data });
+        inline = true;
+      } catch (error) {
+        log.warn(`Couldn't fetch ${a.name}, passing its link instead`, error);
+      }
+    text += `\n[Attachment: ${a.name} ${a.url}${inline ? " (image, already in your context)" : ""}]`;
+  }
+  return { images, text };
 }
 
 async function describe(message: Message) {
@@ -26,11 +49,15 @@ async function describe(message: Message) {
     message.channel.type === ChannelType.DM
       ? "DM"
       : `#${"name" in message.channel ? message.channel.name : message.channelId}`;
+  const files = await attachments(message);
   let text = message.content.replaceAll(new RegExp(`<@!?${client.user!.id}>`, "g"), "").trim();
-  text += attachments(message);
+  text += files.text;
   const ref = message.reference?.messageId && (await message.fetchReference().catch(() => null));
   if (ref) text = `[Replying to ${ref.author.username}: ${ref.content}]\n\n${text}`;
-  return `[Discord message from owner in ${where}, a channel Pukeko can read]\n${text}`;
+  return {
+    prompt: `[Discord message from owner in ${where}, a channel Pukeko can read]\n${text}`,
+    images: files.images,
+  };
 }
 
 /** DMs and @mentions */
@@ -48,9 +75,10 @@ export async function handleMessage(message: Message) {
     (c) => message.reply(c),
     (c) => channel.send(c),
   );
-  const reply = await whileTyping(channel, async () =>
-    chatTurn(message.channelId, await describe(message), post, true),
-  );
+  const reply = await whileTyping(channel, async () => {
+    const { prompt, images } = await describe(message);
+    return chatTurn(message.channelId, prompt, post, { fold: true, images });
+  });
   // Empty when it joined a turn already running, whose reply goes with a later message
   if (reply) await post(reply);
 }
@@ -59,10 +87,11 @@ async function answer(
   interaction: ChatInputCommandInteraction | ModalSubmitInteraction,
   prompt: string,
   quote: string,
+  images?: Image[],
 ) {
-  await interaction.deferReply();
+  if (!interaction.deferred) await interaction.deferReply();
   const post = responder(interaction, `${quote}\n\n`, (c) => interaction.editReply(c));
-  const reply = await chatTurn(interaction.channelId!, prompt, post);
+  const reply = await chatTurn(interaction.channelId!, prompt, post, { images });
   await post(reply);
 }
 
@@ -98,7 +127,10 @@ async function handleAskAbout(interaction: MessageContextMenuCommandInteraction)
     .catch(() => null);
   if (!submit) return;
   const prompt = submit.fields.getTextInputValue("prompt").trim();
-  let content = target.content + attachments(target);
+  // Downloading images can outlast the 3 seconds Discord gives to acknowledge
+  await submit.deferReply();
+  const files = await attachments(target);
+  let content = target.content + files.text;
   for (const e of target.embeds)
     content += `\n[Embed: ${[e.title, e.description, e.url].filter(Boolean).join(" ")}]`;
   const header = `[Message from ${target.author.username} at ${target.createdAt.toISOString()}]`;
@@ -106,6 +138,7 @@ async function handleAskAbout(interaction: MessageContextMenuCommandInteraction)
     submit,
     `[Discord "Ask Pukeko" on a message, from owner in ${where(interaction)}]\n${header}\n${content.trim()}\n\n${prompt || "(no prompt, respond to the message)"}`,
     `-# Re: ${target.url}${prompt ? `\n> ${prompt}` : ""}`,
+    files.images,
   );
 }
 

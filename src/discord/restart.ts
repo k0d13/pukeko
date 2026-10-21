@@ -1,6 +1,6 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { channelSession, type OnUpdate } from "#/agent/index.ts";
+import { channelSession, type Image, type OnUpdate } from "#/agent/index.ts";
 import { readJson } from "#/core/files.ts";
 import { logger } from "#/core/log.ts";
 import { paths } from "#/core/paths.ts";
@@ -21,12 +21,20 @@ function file() {
   return join(paths.state, "restart.json");
 }
 
-/** A chat turn in that channel's conversation, noted so a restart can report back there */
-/** `fold` feeds the prompt into a turn already running in this channel; see `Session.ask` */
-export async function chatTurn(channel: string, prompt: string, onUpdate?: OnUpdate, fold = false) {
+/**
+ * A chat turn in that channel's conversation, noted so a restart can report back there. `fold`
+ * feeds the prompt into a turn already running in this channel; see `Session.ask`
+ */
+export async function chatTurn(
+  channel: string,
+  prompt: string,
+  onUpdate?: OnUpdate,
+  { fold = false, images }: { fold?: boolean; images?: Image[] } = {},
+) {
   running.set(channel, (running.get(channel) ?? 0) + 1);
   try {
-    return await (await channelSession(channel)).ask(prompt, onUpdate, fold ? channel : undefined);
+    const session = await channelSession(channel);
+    return await session.ask(prompt, onUpdate, fold ? channel : undefined, images);
   } finally {
     running.set(channel, running.get(channel)! - 1);
     if (!running.get(channel)) running.delete(channel);

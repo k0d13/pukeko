@@ -112,8 +112,14 @@ function tokens(count = 0) {
   return count < 1000 ? String(count) : `${(count / 1000).toFixed(1)}k`;
 }
 
+/** A base64 image passed straight into the prompt */
+export type Image = {
+  mediaType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+  data: string;
+};
+
 // A message waiting on the turn that answers it
-type Waiting = { uuid: string; prompt: string; done: (reply: string) => void };
+type Waiting = { uuid: string; prompt: string; images?: Image[]; done: (reply: string) => void };
 type Live = { chat?: string; onUpdate?: OnUpdate; add: (message: Waiting) => void };
 
 /** A prompt stream for one query, so messages can be added while it runs */
@@ -122,10 +128,19 @@ function inbox() {
   let wake: (() => void) | undefined;
   let closed = false;
   return {
-    push({ uuid, prompt }: Waiting) {
+    push({ uuid, prompt, images = [] }: Waiting) {
+      const content = images.length
+        ? [
+            ...images.map(({ mediaType, data }) => ({
+              type: "image" as const,
+              source: { type: "base64" as const, media_type: mediaType, data },
+            })),
+            { type: "text" as const, text: prompt },
+          ]
+        : prompt;
       queued.push({
         type: "user",
-        message: { role: "user", content: prompt },
+        message: { role: "user", content },
         parent_tool_use_id: null,
         uuid: uuid as SDKUserMessage["uuid"],
       });
@@ -284,9 +299,9 @@ export function createSession(name: string, file?: string, saved?: Partial<State
     return `[New conversation: the last one here went quiet for over ${config.conversations.idle}]\n\n${prompt}`;
   }
 
-  function enqueue(prompt: string, onUpdate?: OnUpdate, chat?: string) {
+  function enqueue(prompt: string, onUpdate?: OnUpdate, chat?: string, images?: Image[]) {
     return new Promise<string>((done) => {
-      const message = { uuid: crypto.randomUUID(), prompt, done };
+      const message = { uuid: crypto.randomUUID(), prompt, images, done };
       if (chat && live?.chat === chat) {
         log.info(`${name}: fed into the running turn: ${preview(prompt)}`);
         if (onUpdate) live.onUpdate = onUpdate;
@@ -306,10 +321,11 @@ export function createSession(name: string, file?: string, saved?: Partial<State
     /**
      * `onUpdate` posts progress as the turn goes; without it only the reply comes back. Asks from
      * the same `chat` while a turn runs are fed into it, and it posts from then on through the
-     * latest one's `onUpdate`. The latest gets the reply; the others get ""
+     * latest one's `onUpdate`. The latest gets the reply; the others get "". `images` go in ahead
+     * of the text
      */
-    ask(text: string, onUpdate?: OnUpdate, chat?: string) {
-      return enqueue(`${text}\n\n[Current time: ${now()}]`, onUpdate, chat);
+    ask(text: string, onUpdate?: OnUpdate, chat?: string, images?: Image[]) {
+      return enqueue(`${text}\n\n[Current time: ${now()}]`, onUpdate, chat, images);
     },
     /** Whether there was a turn to stop */
     stop() {
