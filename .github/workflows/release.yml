@@ -3,15 +3,27 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Or from the Actions tab: Release, Run workflow, then the version. It tags the commit it runs on
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, like v0.5.1"
+        required: true
 
 permissions:
   contents: write
+
+env:
+  TAG: ${{ inputs.version || github.ref_name }}
 
 jobs:
   release:
     # macOS so the darwin binaries can be ad-hoc signed, which Apple Silicon requires
     runs-on: macos-latest
     steps:
+      - name: Check the version
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::\"$TAG\" isn't a version like v0.5.1"; exit 1; }
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
@@ -19,9 +31,11 @@ jobs:
       - run: |
           for target in linux-arm64 linux-x64 darwin-arm64 darwin-x64; do
             bun build src/cli/index.ts --compile --minify --target "bun-$target" --outfile "dist/pukeko-$target" \
-              --define "PUKEKO_RELEASE=\"$GITHUB_REF_NAME\""
+              --define "PUKEKO_RELEASE=\"$TAG\""
           done
           codesign --force --sign - dist/pukeko-darwin-*
-      - run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes
+      # Creates the tag too when it was run by hand. Tags pushed with the workflow's token don't
+      # start another run, so this releases once
+      - run: gh release create "$TAG" dist/* --generate-notes --target "$GITHUB_SHA"
         env:
           GH_TOKEN: ${{ github.token }}

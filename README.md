@@ -41,7 +41,7 @@ and runs `pukeko init` to create `~/.pukeko/workspace`, which offers to run `cla
 Discord: create an app at discord.com/developers, add a bot, enable **Message Content Intent**,
 and invite it with the `bot` + `applications.commands` scopes.
 
-Releases: push a `v*` tag and `.github/workflows/release.yml` builds the binaries the installer downloads.
+Releases: push a `v*` tag, or run the Release workflow from the Actions tab with the version, and `.github/workflows/release.yml` builds the binaries the installer downloads.
 
 ## Configuring
 
