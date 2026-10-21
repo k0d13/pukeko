@@ -4,6 +4,7 @@ import { logger } from "#/core/log.ts";
 import { paths } from "#/core/paths.ts";
 import { version } from "#/core/release.ts";
 import { startDiscord } from "#/discord/index.ts";
+import { backOnline, noteRestarts } from "#/discord/restart.ts";
 import { startHandlers } from "#/handlers/index.ts";
 import { startJobs } from "#/jobs.ts";
 
@@ -17,9 +18,11 @@ export default defineCommand({
     log.info(
       `${agent.model || "Default model"}${agent.effort ? `, ${agent.effort} effort` : ""}, ${conversations.scope === "shared" ? "one shared conversation" : "a conversation per channel"}, sandbox ${agent.sandbox ? "on" : "off"}, ${timezone}`,
     );
+    noteRestarts();
     await startDiscord();
     await startHandlers();
     await startJobs();
     log.info("Ready");
+    await backOnline();
   },
 });

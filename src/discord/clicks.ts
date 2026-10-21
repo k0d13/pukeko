@@ -8,10 +8,10 @@ import {
   type MessageComponentInteraction,
   type ModalSubmitInteraction,
 } from "discord.js";
-import { channelSession } from "#/agent/index.ts";
 import { logger, preview } from "#/core/log.ts";
 import { type Entry, forget, lookup } from "./buttons.ts";
 import { responder, tell, whileTyping, where } from "./client.ts";
+import { chatTurn } from "./restart.ts";
 
 const log = logger("discord");
 const kinds = { button: "button", input: "text input", select: "select menu" };
@@ -140,8 +140,8 @@ export async function handleComponent(
 
   const picked = entry.kind === "select" ? `: ${detail}` : "";
   const post = responder(interaction, `-# ↪ ${entry.label}${picked}\n\n`);
-  const reply = await whileTyping(interaction.channel, async () =>
-    (await channelSession(interaction.channelId!)).ask(prompt, post),
+  const reply = await whileTyping(interaction.channel, () =>
+    chatTurn(interaction.channelId!, prompt, post),
   );
   await post(reply);
 }
