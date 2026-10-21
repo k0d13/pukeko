@@ -22,10 +22,11 @@ function file() {
 }
 
 /** A chat turn in that channel's conversation, noted so a restart can report back there */
-export async function chatTurn(channel: string, prompt: string, onUpdate?: OnUpdate) {
+/** `fold` feeds the prompt into a turn already running in this channel; see `Session.ask` */
+export async function chatTurn(channel: string, prompt: string, onUpdate?: OnUpdate, fold = false) {
   running.set(channel, (running.get(channel) ?? 0) + 1);
   try {
-    return await (await channelSession(channel)).ask(prompt, onUpdate);
+    return await (await channelSession(channel)).ask(prompt, onUpdate, fold ? channel : undefined);
   } finally {
     running.set(channel, running.get(channel)! - 1);
     if (!running.get(channel)) running.delete(channel);
