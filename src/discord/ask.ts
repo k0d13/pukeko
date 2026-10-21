@@ -10,10 +10,10 @@ import {
   type MessageContextMenuCommandInteraction,
   type ModalSubmitInteraction,
 } from "discord.js";
-import { channelSession } from "#/agent/index.ts";
 import { logger, preview } from "#/core/log.ts";
 import { client, owner, poster, responder, whileTyping, where } from "./client.ts";
 import type { Command } from "./commands.ts";
+import { chatTurn } from "./restart.ts";
 
 const log = logger("discord");
 
@@ -49,7 +49,7 @@ export async function handleMessage(message: Message) {
     (c) => channel.send(c),
   );
   const reply = await whileTyping(channel, async () =>
-    (await channelSession(message.channelId)).ask(await describe(message), post),
+    chatTurn(message.channelId, await describe(message), post),
   );
   await post(reply);
 }
@@ -61,7 +61,7 @@ async function answer(
 ) {
   await interaction.deferReply();
   const post = responder(interaction, `${quote}\n\n`, (c) => interaction.editReply(c));
-  const reply = await (await channelSession(interaction.channelId!)).ask(prompt, post);
+  const reply = await chatTurn(interaction.channelId!, prompt, post);
   await post(reply);
 }
 
