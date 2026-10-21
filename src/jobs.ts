@@ -7,6 +7,7 @@ import { logger, preview, seconds } from "#/core/log.ts";
 import { paths } from "#/core/paths.ts";
 import { watchFolder } from "#/core/watch.ts";
 import { send } from "#/discord/client.ts";
+import { backgroundTurn } from "#/discord/restart.ts";
 
 const log = logger("jobs");
 const running = new Map<string, { stop(): void }>();
@@ -113,7 +114,7 @@ async function load(id: string, path: string) {
     return "off, it has no schedule or enabled: false";
   }
   const job = { schedule, oneOff };
-  const run = async () => {
+  const runJob = async () => {
     const started = Date.now();
     log.info(`Running jobs/${id}`);
     try {
@@ -138,6 +139,8 @@ async function load(id: string, path: string) {
       await alert(id, error instanceof Error ? error.message : String(error));
     }
   };
+  // Counted as a turn so `--after-turn` waits for the reply and the one-off cleanup too
+  const run = () => backgroundTurn(runJob);
   const next = nextTime(job);
   stop(id);
   // Bun.cron only takes cron expressions, so one-offs get a timer. It waits for each run to
