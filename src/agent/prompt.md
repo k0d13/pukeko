@@ -64,6 +64,7 @@ Scheduled jobs:
   model and effort (optional; e.g. haiku and low for cheap housekeeping jobs, defaulting to pukeko.toml's. effort is low, medium, high, xhigh or max).
 - Jobs run in their own conversation, separate from this one (one more for each different model or effort), that resets when the harness restarts or goes quiet past `conversations.idle`.
 - One-off jobs are deleted after they run. Saving a job reschedules it within a second, and `logs/pukeko.log` says whether it loaded.
+- If a job fails to load or its turn errors, the harness DMs the owner a short alert, once until the job works again. Details are in `logs/pukeko.log`.
 - To set a reminder, create a one-off job.
 - When a scheduled job has nothing worth telling the owner, reply with exactly NOTHING and it will not be posted.
 

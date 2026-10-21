@@ -19,7 +19,7 @@ the basics from `templates/`; personality, integrations and jobs are yours to ad
   Image attachments (PNG, JPEG, GIF, WebP up to 3.75 MB) go straight into the prompt, and so do text files (by type or extension, valid UTF-8, up to 100 KB each and 300 KB per message), labelled with who sent them; other files come through as links.
   Replies are markdown plus directives (`markup.ts`, documented for the agent in `prompt.md`), rendered as Components v2 messages (`render.ts`) with inline images, files, boxes, buttons, text inputs and selects.
   Each button carries a prompt the agent wrote; a click (`clicks.ts`) sends it as a new turn in that channel's conversation. They're kept in `.pukeko/buttons.json` (`buttons.ts`) for 90 days.
-- `src/jobs.ts`: runs `jobs/<id>/job.md` on cron or one-off schedules (optionally with its own `model` and `effort`), rescheduling them as the files change.
+- `src/jobs.ts`: runs `jobs/<id>/job.md` on cron or one-off schedules (optionally with its own `model` and `effort`), rescheduling them as the files change. A job that fails to load or run DMs the owner once, until it next works.
 - `src/handlers/`: agent-written `triggers/*.ts` (discord.js event listeners) and `commands/*.ts` (slash and context menu commands), imported into the harness and reloaded as the files change.
   They import `discord.js` and a `pukeko` module (`api.ts`: `ask`, `send`, `render`, `load`/`save` state) as Bun virtual modules, so the workspace needs no `node_modules`.
   This code runs unsandboxed in the harness process, so it can reach `.env` and `.pukeko/`.

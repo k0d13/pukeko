@@ -3,19 +3,32 @@ import { join } from "node:path";
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import { backgroundSession } from "#/agent/index.ts";
 import { config, effortLevels } from "#/core/config.ts";
-import { logger, seconds } from "#/core/log.ts";
+import { logger, preview, seconds } from "#/core/log.ts";
 import { paths } from "#/core/paths.ts";
 import { watchFolder } from "#/core/watch.ts";
 import { send } from "#/discord/client.ts";
 
 const log = logger("jobs");
 const running = new Map<string, { stop(): void }>();
+// Jobs that failed and haven't worked since, so a job failing on every run alerts only once
+const failing = new Set<string>();
 // setTimeout fires straight away past 2^31 - 1 ms (about 24 days), so longer waits go in hops
 const longestTimeout = 2 ** 31 - 1;
 
 function stop(id: string) {
   running.get(id)?.stop();
   running.delete(id);
+  failing.delete(id);
+}
+
+// The owner's DMs whatever the job's channel, as the one who has to fix it. Terse: the log has the detail
+async function alert(id: string, reason: string) {
+  if (failing.has(id)) return;
+  failing.add(id);
+  await send(
+    undefined,
+    `⚠️ Job \`${id}\` failed: ${preview(reason.replace(/\s+/g, " "), 200)}`,
+  ).catch((error) => log.warn(`jobs/${id}: couldn't send the failure alert`, error));
 }
 
 // jobs/<id>/job.md is YAML frontmatter, then the prompt. Without a schedule it's off. A bad
@@ -83,6 +96,15 @@ export function nextRun(at: Date | null) {
 }
 
 async function add(id: string, path: string) {
+  try {
+    return await load(id, path);
+  } catch (error) {
+    await alert(id, `couldn't load, ${error instanceof Error ? error.message : error}`);
+    throw error;
+  }
+}
+
+async function load(id: string, path: string) {
   const { schedule, channel, model, effort, prompt, oneOff } = parseJob(
     await Bun.file(path).text(),
   );
@@ -95,11 +117,16 @@ async function add(id: string, path: string) {
     const started = Date.now();
     log.info(`Running jobs/${id}`);
     try {
-      const reply = await backgroundSession({ model, effort }).ask(
+      const { reply, error } = await backgroundSession({ model, effort }).run(
         `[Scheduled job: ${id}]\n\n${prompt}`,
       );
+      if (error !== undefined) {
+        log.report(`jobs/${id} failed after ${seconds(Date.now() - started)}`, error);
+        return await alert(id, error);
+      }
       const quiet = reply.trim() === "NOTHING";
       if (!quiet) await send(channel, reply);
+      failing.delete(id);
       const outcome = quiet ? "nothing to say" : `sent to ${channel ?? "the owner's DMs"}`;
       log.info(
         `jobs/${id} done in ${seconds(Date.now() - started)}, ${outcome}${oneOff ? "" : `, ${nextRun(nextTime(job))}`}`,
@@ -108,6 +135,7 @@ async function add(id: string, path: string) {
       if (oneOff) await rm(join(paths.jobs, id), { recursive: true, force: true });
     } catch (error) {
       log.report(`jobs/${id} failed after ${seconds(Date.now() - started)}`, error);
+      await alert(id, error instanceof Error ? error.message : String(error));
     }
   };
   const next = nextTime(job);

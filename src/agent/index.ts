@@ -119,7 +119,12 @@ export type Image = {
 };
 
 // A message waiting on the turn that answers it
-type Waiting = { uuid: string; prompt: string; images?: Image[]; done: (reply: string) => void };
+type Waiting = {
+  uuid: string;
+  prompt: string;
+  images?: Image[];
+  done: (reply: string, error?: string) => void;
+};
 type Live = { chat?: string; onUpdate?: OnUpdate; add: (message: Waiting) => void };
 
 /** A prompt stream for one query, so messages can be added while it runs */
@@ -214,11 +219,13 @@ export function createSession(name: string, file?: string, saved?: Partial<State
     };
     // The latest message a result answered gets the reply, which covers the ones before it.
     // Once nothing's waiting, no more can join and the query ends
-    const settle = (uuids: string[], reply: string) => {
+    const settle = (uuids: string[], reply: string, error?: string) => {
       const answered = waiting.filter((message) => uuids.includes(message.uuid));
       waiting = waiting.filter((message) => !uuids.includes(message.uuid));
       updates = updates.then(() =>
-        answered.forEach((message, i) => message.done(i === answered.length - 1 ? reply : "")),
+        answered.forEach((message, i) =>
+          i === answered.length - 1 ? message.done(reply, error) : message.done(""),
+        ),
       );
       if (waiting.length) return;
       input.close();
@@ -248,10 +255,9 @@ export function createSession(name: string, file?: string, saved?: Partial<State
             }
         } else if (message.type === "result") {
           pending = "";
-          const reply =
-            message.subtype === "success"
-              ? message.result
-              : `⚠️ Turn ended early (${message.subtype})`;
+          const error =
+            message.subtype === "success" ? undefined : `Turn ended early (${message.subtype})`;
+          const reply = message.subtype === "success" ? message.result : `⚠️ ${error}`;
           const { input_tokens, output_tokens, cache_read_input_tokens } = message.usage;
           const line = `${name}: turn ${message.subtype === "success" ? "done" : `ended early (${message.subtype})`} in ${seconds(message.duration_ms)}, ${message.num_turns} steps, ${tokens(input_tokens + (cache_read_input_tokens ?? 0))} tokens in (${tokens(cache_read_input_tokens ?? 0)} cached), ${tokens(output_tokens)} out, ${reply.length} characters back`;
           if (message.subtype === "success") log.info(line);
@@ -261,10 +267,11 @@ export function createSession(name: string, file?: string, saved?: Partial<State
             save();
           }
           // Older CLIs don't say which messages a result answered
-          settle(message.user_message_uuids ?? all(), reply);
+          settle(message.user_message_uuids ?? all(), reply, error);
         }
       }
-      if (waiting.length) settle(all(), "⚠️ Turn ended without a reply");
+      if (waiting.length)
+        settle(all(), "⚠️ Turn ended without a reply", "Turn ended without a reply");
     } catch (error) {
       if (abort.signal.aborted) {
         log.info(`${name}: turn stopped after ${seconds(Date.now() - begun)}`);
@@ -279,7 +286,8 @@ export function createSession(name: string, file?: string, saved?: Partial<State
         restart();
         return runTurn(waiting, turn.onUpdate, chat);
       }
-      settle(all(), `⚠️ ${error instanceof Error ? error.message : error}`);
+      const reason = error instanceof Error ? error.message : String(error);
+      settle(all(), `⚠️ ${reason}`, reason);
     } finally {
       if (current === abort) current = undefined;
       if (live === turn) live = undefined;
@@ -300,7 +308,8 @@ export function createSession(name: string, file?: string, saved?: Partial<State
   }
 
   function enqueue(prompt: string, onUpdate?: OnUpdate, chat?: string, images?: Image[]) {
-    return new Promise<string>((done) => {
+    return new Promise<{ reply: string; error?: string }>((resolve) => {
+      const done = (reply: string, error?: string) => resolve({ reply, error });
       const message = { uuid: crypto.randomUUID(), prompt, images, done };
       if (chat && live?.chat === chat) {
         log.info(`${name}: fed into the running turn: ${preview(prompt)}`);
@@ -325,6 +334,10 @@ export function createSession(name: string, file?: string, saved?: Partial<State
      * of the text
      */
     ask(text: string, onUpdate?: OnUpdate, chat?: string, images?: Image[]) {
+      return this.run(text, onUpdate, chat, images).then(({ reply }) => reply);
+    },
+    /** Like `ask`, but also says why the turn failed, if it did. A stopped turn isn't a failure */
+    run(text: string, onUpdate?: OnUpdate, chat?: string, images?: Image[]) {
       return enqueue(`${text}\n\n[Current time: ${now()}]`, onUpdate, chat, images);
     },
     /** Whether there was a turn to stop */
