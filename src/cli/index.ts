@@ -3,6 +3,7 @@ import { defineCommand, runMain } from "citty";
 import { setWorkspace } from "#/core/paths.ts";
 import { version } from "#/core/release.ts";
 import check from "./check.ts";
+import history from "./history.ts";
 import init from "./init.ts";
 import jobs from "./jobs.ts";
 import service from "./service.ts";
@@ -19,7 +20,7 @@ const main = defineCommand({
   },
   setup: ({ args }) => setWorkspace(args.workspace),
   default: "start",
-  subCommands: { start, init, check, jobs, service, upgrade },
+  subCommands: { start, init, check, history, jobs, service, upgrade },
 });
 
 await runMain(main);
