@@ -49,9 +49,10 @@ export async function handleMessage(message: Message) {
     (c) => channel.send(c),
   );
   const reply = await whileTyping(channel, async () =>
-    chatTurn(message.channelId, await describe(message), post),
+    chatTurn(message.channelId, await describe(message), post, true),
   );
-  await post(reply);
+  // Empty when it joined a turn already running, whose reply goes with a later message
+  if (reply) await post(reply);
 }
 
 async function answer(

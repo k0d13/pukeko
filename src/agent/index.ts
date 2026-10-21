@@ -1,6 +1,11 @@
 import { chmod, mkdir, rename } from "node:fs/promises";
 import { join } from "node:path";
-import { type EffortLevel, type Options, query } from "@anthropic-ai/claude-agent-sdk";
+import {
+  type EffortLevel,
+  type Options,
+  query,
+  type SDKUserMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import { config, idleLimit, secrets } from "#/core/config.ts";
 import { readJson, write } from "#/core/files.ts";
 import { logger, preview, seconds } from "#/core/log.ts";
@@ -107,10 +112,45 @@ function tokens(count = 0) {
   return count < 1000 ? String(count) : `${(count / 1000).toFixed(1)}k`;
 }
 
+// A message waiting on the turn that answers it
+type Waiting = { uuid: string; prompt: string; done: (reply: string) => void };
+type Live = { chat?: string; onUpdate?: OnUpdate; add: (message: Waiting) => void };
+
+/** A prompt stream for one query, so messages can be added while it runs */
+function inbox() {
+  const queued: SDKUserMessage[] = [];
+  let wake: (() => void) | undefined;
+  let closed = false;
+  return {
+    push({ uuid, prompt }: Waiting) {
+      queued.push({
+        type: "user",
+        message: { role: "user", content: prompt },
+        parent_tool_use_id: null,
+        uuid: uuid as SDKUserMessage["uuid"],
+      });
+      wake?.();
+    },
+    close() {
+      closed = true;
+      wake?.();
+    },
+    async *messages() {
+      while (true) {
+        while (queued.length) yield queued.shift()!;
+        if (closed) return;
+        await new Promise<void>((resolve) => (wake = resolve));
+      }
+    },
+  };
+}
+
 /** One conversation, running turns one at a time. With a `file` it resumes across restarts */
 export function createSession(name: string, file?: string, saved?: Partial<State>) {
   let state: State = { model: config.agent.model, effort: config.agent.effort, id: "", ...saved };
   let current: AbortController | undefined;
+  // The turn running now, which messages from its chat can join
+  let live: Live | undefined;
   let queue = Promise.resolve();
   // Bumped by restart() so a turn already in flight can't save its ID afterwards
   let generation = 0;
@@ -126,33 +166,57 @@ export function createSession(name: string, file?: string, saved?: Partial<State
     save();
   }
 
-  async function runTurn(prompt: string, onUpdate?: OnUpdate): Promise<string> {
+  async function runTurn(waiting: Waiting[], onUpdate?: OnUpdate, chat?: string): Promise<void> {
     const abort = (current = new AbortController());
     const turnGeneration = generation;
     const resuming = Boolean(state.id);
+    const input = inbox();
+    const turn: Live = {
+      chat,
+      onUpdate,
+      add(message) {
+        waiting.push(message);
+        input.push(message);
+      },
+    };
+    live = turn;
+    for (const message of waiting) input.push(message);
     let started = false;
-    let reply = "";
     // Text waits until a tool call shows it isn't the final reply, which the result carries
     let pending = "";
     let updates = Promise.resolve();
     const flush = () => {
       const text = pending.trim();
+      const post = turn.onUpdate;
       pending = "";
-      if (!text || !onUpdate || !config.agent.updates) return;
+      if (!text || !post || !config.agent.updates) return;
       updates = updates.then(() =>
-        onUpdate(text).then(
+        post(text).then(
           () => {},
           (error) => log.warn(`${name}: couldn't post an update`, error),
         ),
       );
     };
+    // The latest message a result answered gets the reply, which covers the ones before it.
+    // Once nothing's waiting, no more can join and the query ends
+    const settle = (uuids: string[], reply: string) => {
+      const answered = waiting.filter((message) => uuids.includes(message.uuid));
+      waiting = waiting.filter((message) => !uuids.includes(message.uuid));
+      updates = updates.then(() =>
+        answered.forEach((message, i) => message.done(i === answered.length - 1 ? reply : "")),
+      );
+      if (waiting.length) return;
+      input.close();
+      if (live === turn) live = undefined;
+    };
+    const all = () => waiting.map((message) => message.uuid);
     const begun = Date.now();
     log.info(
-      `${name}: turn started, ${resuming ? `resuming ${state.id.slice(0, 8)}` : "new conversation"}, ${state.model || "default model"}${state.effort ? `, ${state.effort} effort` : ""}: ${preview(prompt)}`,
+      `${name}: turn started, ${resuming ? `resuming ${state.id.slice(0, 8)}` : "new conversation"}, ${state.model || "default model"}${state.effort ? `, ${state.effort} effort` : ""}: ${preview(waiting[0]!.prompt)}`,
     );
     try {
       for await (const message of query({
-        prompt,
+        prompt: input.messages(),
         options: { ...(await options(state)), abortController: abort },
       })) {
         if (message.type === "system" && message.subtype === "init") {
@@ -168,7 +232,8 @@ export function createSession(name: string, file?: string, saved?: Partial<State
               log.info(`${name}: ${block.name}${target(block.input as Record<string, unknown>)}`);
             }
         } else if (message.type === "result") {
-          reply =
+          pending = "";
+          const reply =
             message.subtype === "success"
               ? message.result
               : `⚠️ Turn ended early (${message.subtype})`;
@@ -176,28 +241,34 @@ export function createSession(name: string, file?: string, saved?: Partial<State
           const line = `${name}: turn ${message.subtype === "success" ? "done" : `ended early (${message.subtype})`} in ${seconds(message.duration_ms)}, ${message.num_turns} steps, ${tokens(input_tokens + (cache_read_input_tokens ?? 0))} tokens in (${tokens(cache_read_input_tokens ?? 0)} cached), ${tokens(output_tokens)} out, ${reply.length} characters back`;
           if (message.subtype === "success") log.info(line);
           else log.warn(line);
+          if (turnGeneration === generation) {
+            state.last = Date.now();
+            save();
+          }
+          // Older CLIs don't say which messages a result answered
+          settle(message.user_message_uuids ?? all(), reply);
         }
       }
-      if (turnGeneration === generation) {
-        state.last = Date.now();
-        save();
-      }
-      return reply;
+      if (waiting.length) settle(all(), "⚠️ Turn ended without a reply");
     } catch (error) {
       if (abort.signal.aborted) {
         log.info(`${name}: turn stopped after ${seconds(Date.now() - begun)}`);
-        return "⏹️ Stopped";
+        settle(all(), "⏹️ Stopped");
+        return;
       }
       log.error(`${name}: turn failed after ${seconds(Date.now() - begun)}`, error);
       // A saved session that can't be resumed fails before init, so start fresh
       if (resuming && !started) {
         log.warn(`${name}: couldn't resume ${state.id}, starting a new conversation`);
+        input.close();
         restart();
-        return runTurn(prompt, onUpdate);
+        return runTurn(waiting, turn.onUpdate, chat);
       }
-      return `⚠️ ${error instanceof Error ? error.message : error}`;
+      settle(all(), `⚠️ ${error instanceof Error ? error.message : error}`);
     } finally {
-      current = undefined;
+      if (current === abort) current = undefined;
+      if (live === turn) live = undefined;
+      input.close();
       // So the reply never lands before an update
       await updates;
     }
@@ -213,19 +284,32 @@ export function createSession(name: string, file?: string, saved?: Partial<State
     return `[New conversation: the last one here went quiet for over ${config.conversations.idle}]\n\n${prompt}`;
   }
 
-  function enqueue(prompt: string, onUpdate?: OnUpdate) {
-    const turn = queue.then(() => runTurn(freshIfIdle(prompt), onUpdate));
-    queue = turn.then(() => {});
-    return turn;
+  function enqueue(prompt: string, onUpdate?: OnUpdate, chat?: string) {
+    return new Promise<string>((done) => {
+      const message = { uuid: crypto.randomUUID(), prompt, done };
+      if (chat && live?.chat === chat) {
+        log.info(`${name}: fed into the running turn: ${preview(prompt)}`);
+        if (onUpdate) live.onUpdate = onUpdate;
+        live.add(message);
+        return;
+      }
+      queue = queue.then(() =>
+        runTurn([{ ...message, prompt: freshIfIdle(prompt) }], onUpdate, chat),
+      );
+    });
   }
 
   return {
     get setup(): Setup {
       return { model: state.model, effort: state.effort };
     },
-    /** `onUpdate` posts progress as the turn goes; without it only the reply comes back */
-    ask(text: string, onUpdate?: OnUpdate) {
-      return enqueue(`${text}\n\n[Current time: ${now()}]`, onUpdate);
+    /**
+     * `onUpdate` posts progress as the turn goes; without it only the reply comes back. Asks from
+     * the same `chat` while a turn runs are fed into it, and it posts from then on through the
+     * latest one's `onUpdate`. The latest gets the reply; the others get ""
+     */
+    ask(text: string, onUpdate?: OnUpdate, chat?: string) {
+      return enqueue(`${text}\n\n[Current time: ${now()}]`, onUpdate, chat);
     },
     /** Whether there was a turn to stop */
     stop() {
