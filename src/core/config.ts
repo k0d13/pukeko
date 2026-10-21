@@ -9,7 +9,7 @@ export const effortLevels: EffortLevel[] = ["low", "medium", "high", "xhigh", "m
 const defaults = {
   owner: "",
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-  agent: { model: "", effort: "" as EffortLevel | "", sandbox: true },
+  agent: { model: "", effort: "" as EffortLevel | "", sandbox: true, updates: true },
   conversations: { scope: "channel" as "channel" | "shared", idle: "4h", context: 100_000 },
 };
 

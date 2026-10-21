@@ -19,6 +19,9 @@
 # This is what actually stops `cat .pukeko/...`; without it only the Read tool is blocked
 # sandbox = true
 
+# Post what the agent says between tool calls as it works, not just the final reply
+# updates = true
+
 [conversations]
 # "channel": each Discord channel, DM and thread is its own conversation, and they run in parallel
 # "shared":  one conversation everywhere, one message at a time

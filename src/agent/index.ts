@@ -138,7 +138,7 @@ export function createSession(name: string, file?: string, saved?: Partial<State
     const flush = () => {
       const text = pending.trim();
       pending = "";
-      if (!text || !onUpdate) return;
+      if (!text || !onUpdate || !config.agent.updates) return;
       updates = updates.then(() =>
         onUpdate(text).then(
           () => {},
