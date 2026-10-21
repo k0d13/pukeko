@@ -1,6 +1,5 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { Cron } from "croner";
 import { backgroundSession } from "#/agent/index.ts";
 import { config } from "#/core/config.ts";
 import { logger, seconds } from "#/core/log.ts";
@@ -9,7 +8,9 @@ import { watchFolder } from "#/core/watch.ts";
 import { send } from "#/discord/client.ts";
 
 const log = logger("jobs");
-const running = new Map<string, Cron>();
+const running = new Map<string, { stop(): void }>();
+// setTimeout fires straight away past 2^31 - 1 ms (about 24 days), so longer waits go in hops
+const longestTimeout = 2 ** 31 - 1;
 
 function stop(id: string) {
   running.get(id)?.stop();
@@ -31,9 +32,43 @@ export function parseJob(text: string) {
   };
 }
 
+// One-offs are read in the configured timezone unless they carry their own offset
+function oneOffTime(schedule: string) {
+  const local = schedule.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::([0-5]\d(?:\.\d+)?))?$/,
+  );
+  if (!local) {
+    const at = Date.parse(schedule);
+    if (Number.isNaN(at)) throw new Error(`"${schedule}" isn't a valid datetime`);
+    return at;
+  }
+  const [year, month, day, hour, minute] = local.slice(1, 6).map(Number) as [number, ...number[]];
+  // Bun.cron.parse does the timezone maths: the first match from just before that day is it
+  const around = Date.UTC(year, month! - 1, day);
+  let at: Date | null = null;
+  try {
+    at = Bun.cron.parse(`${minute} ${hour} ${day} ${month} *`, around - 2 * 86_400_000, {
+      tz: config.timezone,
+    });
+  } catch {}
+  if (!at || at.getTime() > around + 2 * 86_400_000)
+    throw new Error(`"${schedule}" isn't a real date`);
+  return at.getTime() + Number(local[6] ?? 0) * 1000;
+}
+
+/** When a job next runs, or null for a one-off whose time has passed */
+export function nextTime({ schedule, oneOff }: { schedule: string; oneOff: boolean }) {
+  if (oneOff) {
+    const at = oneOffTime(schedule);
+    return at > Date.now() ? new Date(at) : null;
+  }
+  const at = Bun.cron.parse(schedule, Date.now(), { tz: config.timezone });
+  if (!at) throw new Error(`"${schedule}" never runs`);
+  return at;
+}
+
 /** When a job next runs, in the configured timezone */
-export function nextRun(cron: Cron) {
-  const at = cron.nextRun();
+export function nextRun(at: Date | null) {
   return at
     ? `next run ${at.toLocaleString(undefined, { timeZone: config.timezone })}`
     : "overdue, runs on start";
@@ -45,7 +80,8 @@ async function add(id: string, path: string) {
     stop(id);
     return "off, it has no schedule or enabled: false";
   }
-  const cron = new Cron(schedule, { timezone: config.timezone, protect: true }, async () => {
+  const job = { schedule, oneOff };
+  const run = async () => {
     const started = Date.now();
     log.info(`Running jobs/${id}`);
     try {
@@ -54,20 +90,31 @@ async function add(id: string, path: string) {
       if (!quiet) await send(channel, reply);
       const outcome = quiet ? "nothing to say" : `sent to ${channel ?? "the owner's DMs"}`;
       log.info(
-        `jobs/${id} done in ${seconds(Date.now() - started)}, ${outcome}${oneOff ? "" : `, ${nextRun(cron)}`}`,
+        `jobs/${id} done in ${seconds(Date.now() - started)}, ${outcome}${oneOff ? "" : `, ${nextRun(nextTime(job))}`}`,
       );
       // Deleted only once delivered, so a failed reminder retries on the next start
       if (oneOff) await rm(join(paths.jobs, id), { recursive: true, force: true });
     } catch (error) {
       log.report(`jobs/${id} failed after ${seconds(Date.now() - started)}`, error);
     }
-  });
+  };
+  const next = nextTime(job);
   stop(id);
-  running.set(id, cron);
-  const note = `${schedule}, ${nextRun(cron)}`;
-  // A one-off whose time already passed runs now, late beats never
-  if (oneOff && !cron.nextRun()) cron.trigger();
-  return note;
+  // Bun.cron only takes cron expressions, so one-offs get a timer. It waits for each run to
+  // finish before scheduling the next, so a slow job never overlaps itself
+  running.set(id, oneOff ? runAt(next, run) : Bun.cron(schedule, run, { tz: config.timezone }));
+  return `${schedule}, ${nextRun(next)}`;
+}
+
+// A one-off whose time already passed (null) runs now, late beats never
+function runAt(time: Date | null, run: () => unknown) {
+  let timer: Timer;
+  const wait = () => {
+    const left = (time?.getTime() ?? 0) - Date.now();
+    timer = left > longestTimeout ? setTimeout(wait, longestTimeout) : setTimeout(run, left);
+  };
+  wait();
+  return { stop: () => clearTimeout(timer) };
 }
 
 export function startJobs() {
