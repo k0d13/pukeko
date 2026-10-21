@@ -57,7 +57,7 @@ Scheduled jobs:
 - Jobs live in jobs/<id>/job.md: frontmatter, then the prompt body.
   Frontmatter keys: schedule (a cron expression like "0 8 * * *", or an ISO datetime like "2026-10-07T09:00:00" for a one-off),
   channel (optional Discord channel ID; defaults to the owner's DMs), enabled (optional, default true).
-- Jobs run in their own conversation, separate from this one, that resets when the harness restarts.
+- Jobs run in their own conversation, separate from this one, that resets when the harness restarts or goes quiet past `conversations.idle`.
 - One-off jobs are deleted after they run. Saving a job reschedules it within a second, and `logs/pukeko.log` says whether it loaded.
 - To set a reminder, create a one-off job.
 - When a scheduled job has nothing worth telling the owner, reply with exactly NOTHING and it will not be posted.

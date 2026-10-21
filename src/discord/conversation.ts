@@ -7,7 +7,6 @@ import {
 import { channelSession } from "#/agent/index.ts";
 import { config, effortLevels } from "#/core/config.ts";
 import type { Command } from "./commands.ts";
-import { usageReport } from "./usage.ts";
 
 function session(interaction: ChatInputCommandInteraction) {
   return channelSession(interaction.channelId);
@@ -70,25 +69,5 @@ export const commands: Command[] = [
       .toJSON(),
     run: async (interaction: ChatInputCommandInteraction) =>
       interaction.reply((await session(interaction)).stop() ? "⏹️ Stopping" : "Nothing running"),
-  },
-  {
-    data: new SlashCommandBuilder()
-      .setName("compact")
-      .setDescription("Summarise this conversation to free up context")
-      .toJSON(),
-    async run(interaction: ChatInputCommandInteraction) {
-      await interaction.deferReply();
-      await interaction.editReply(await (await session(interaction)).compact());
-    },
-  },
-  {
-    data: new SlashCommandBuilder()
-      .setName("usage")
-      .setDescription("Plan limits and this conversation's usage")
-      .toJSON(),
-    async run(interaction: ChatInputCommandInteraction) {
-      await interaction.deferReply();
-      await interaction.editReply(await usageReport(await session(interaction)));
-    },
   },
 ];

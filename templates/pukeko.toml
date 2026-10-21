@@ -23,3 +23,11 @@
 # "channel": each Discord channel, DM and thread is its own conversation, and they run in parallel
 # "shared":  one conversation everywhere, one message at a time
 # scope = "channel"
+
+# Start a fresh conversation when one's been quiet this long ("30m", "4h", "2d", or "off")
+# By then its prompt cache has expired, so carrying on would resend all of it at full price
+# idle = "4h"
+
+# Compact the conversation as it nears this many tokens (100000 to 1000000)
+# Every turn resends the whole context, so lower uses less of your plan
+# context = 100000

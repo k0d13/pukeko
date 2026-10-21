@@ -10,8 +10,16 @@ const defaults = {
   owner: "",
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   agent: { model: "", effort: "" as EffortLevel | "", sandbox: true },
-  conversations: { scope: "channel" as "channel" | "shared" },
+  conversations: { scope: "channel" as "channel" | "shared", idle: "4h", context: 100_000 },
 };
+
+const units = { m: 60_000, h: 3_600_000, d: 86_400_000 };
+
+/** `conversations.idle` in milliseconds, or 0 when it's "off" */
+export function idleLimit(idle = config.conversations.idle) {
+  const match = idle.match(/^(\d+)\s*([mhd])$/);
+  return match ? Number(match[1]) * units[match[2] as keyof typeof units] : 0;
+}
 
 /** Filled by `loadConfig` */
 export let config = defaults;
@@ -63,6 +71,11 @@ export async function loadConfig() {
     errors.push(`"owner" should be a Discord user ID (17-20 digits), not "${config.owner}"`);
   if (!["channel", "shared"].includes(config.conversations.scope))
     errors.push(`"conversations.scope" should be "channel" or "shared"`);
+  if (config.conversations.idle !== "off" && !idleLimit())
+    errors.push(`"conversations.idle" should be like "30m", "4h" or "2d", or "off"`);
+  const { context } = config.conversations;
+  if (!Number.isInteger(context) || context < 100_000 || context > 1_000_000)
+    errors.push(`"conversations.context" should be a token count from 100000 to 1000000`);
   if (config.agent.effort && !effortLevels.includes(config.agent.effort))
     errors.push(`"agent.effort" should be one of ${effortLevels.join(", ")}`);
   try {
