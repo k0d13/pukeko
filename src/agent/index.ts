@@ -354,9 +354,26 @@ export function channelSession(channelId: string) {
   return session;
 }
 
-let background: Session | undefined;
+const background = new Map<string, Session>();
 
-/** Shared by jobs and handlers, kept out of the chats and forgotten on restart */
-export function backgroundSession() {
-  return (background ??= createSession("background"));
+/**
+ * Shared by jobs and handlers, kept out of the chats and forgotten on restart. A model or effort
+ * other than the configured one gets a conversation of its own, since switching partway loses the
+ * prompt cache
+ */
+export function backgroundSession({ model, effort }: Partial<Setup> = {}) {
+  const setup: Setup = {
+    model: model || config.agent.model,
+    effort: effort || config.agent.effort,
+  };
+  const custom = setup.model !== config.agent.model || setup.effort !== config.agent.effort;
+  const name = custom
+    ? `background ${setup.model || "default"} ${setup.effort}`.trim()
+    : "background";
+  let session = background.get(name);
+  if (!session) {
+    session = createSession(name, undefined, setup);
+    background.set(name, session);
+  }
+  return session;
 }
