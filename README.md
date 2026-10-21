@@ -7,10 +7,11 @@ the basics from `templates/`; personality, integrations and jobs are yours to ad
 
 ## How it works
 
-- `src/cli/`: the `pukeko` command (`index.ts`), one file per subcommand: `start` (the default), `init`, `check` (config and secrets), `jobs` (when each runs next), `service` (`install`, `uninstall`, `start`, `stop`, `restart`, `status`, `logs`) and `upgrade` (`--check` to only look).
+- `src/cli/`: the `pukeko` command (`index.ts`), one file per subcommand: `start` (the default), `init`, `check` (config and secrets), `jobs` (when each runs next), `history search` (past conversations), `service` (`install`, `uninstall`, `start`, `stop`, `restart`, `status`, `logs`) and `upgrade` (`--check` to only look).
 - `src/core/`: workspace paths (`--workspace DIR`, `$PUKEKO_WORKSPACE`, or `~/.pukeko/workspace`), config from `pukeko.toml` and `.env`, release info, scoped console logging (`log.ts`: each turn's tools, timing and tokens, messages, clicks, commands and job runs), and the folder watcher jobs, triggers and commands share (`watch.ts`), which logs loads and failures to `logs/pukeko.log` for the agent to read. Secrets are kept out of the agent's environment; it sources `.env` when a command needs them.
 - `src/agent/`: conversations, resumed across restarts until they go quiet past `[conversations] idle` (`/new` starts a fresh one sooner), compacting as they near `[conversations] context` tokens. One per channel or one shared, per `[conversations] scope`; jobs and handlers share one that lasts until restart, plus another for each model or effort a job overrides.
   Uses the server's `claude`, loads the workspace's `CLAUDE.md`, `.claude/`, and `.mcp.json` (`${VAR}` filled from `.env`).
+  `pukeko history search <words>` lets the agent look back through earlier conversations: it reads Claude Code's own transcripts (`~/.claude/projects/<workspace path>/*.jsonl`, not `.pukeko/`), and returns only user and assistant text, newest first, with the channel or job each came from. Tool results are never included.
   Blocks reading `.pukeko/` through settings the workspace can't override, plus an OS sandbox for Bash.
 - `src/discord/`: replies to the owner (from `pukeko.toml`, or the Discord application owner) in DMs, on @mention, and via `/ask`, `/new` (optionally switching model or effort), and `/stop`, all in one registry with the workspace's commands (`commands.ts`).
   When stopped within 10 minutes of a chat, it says it's back up (and the version) there on restart, and gives a turn the restart cut off another go (`restart.ts`).

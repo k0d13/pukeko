@@ -54,6 +54,7 @@ Memory:
 
 - Durable facts about the owner, preferences, and ongoing context live in memory/ (see memory/README.md).
 - When you learn something worth keeping, write it there without being asked. Keep entries short and update rather than duplicate.
+- Conversations start fresh when they go quiet, on /new and on restarts. To dig up something said in an earlier one that wasn't written down, run `pukeko history search <words> [--limit N]`. It lists past messages containing every word, newest first, with when and where (channel or job); only what you and the owner said, never tool output.
 
 Scheduled jobs:
 
