@@ -1,12 +1,6 @@
 import { join } from "node:path";
-import {
-  type EffortLevel,
-  type Options,
-  type Query,
-  query,
-  type SDKRateLimitInfo,
-} from "@anthropic-ai/claude-agent-sdk";
-import { config, secrets } from "#/core/config.ts";
+import { type EffortLevel, type Options, query } from "@anthropic-ai/claude-agent-sdk";
+import { config, idleLimit, secrets } from "#/core/config.ts";
 import { readJson, write } from "#/core/files.ts";
 import { logger, preview, seconds } from "#/core/log.ts";
 import { paths } from "#/core/paths.ts";
@@ -16,7 +10,8 @@ export type Session = ReturnType<typeof createSession>;
 
 /** Picked with /new and fixed for a conversation, since switching partway loses the prompt cache */
 export type Setup = { model: string; effort: EffortLevel | "" };
-type State = Setup & { id: string };
+// `last` is when its last turn finished, for the idle timeout
+type State = Setup & { id: string; last?: number };
 
 const log = logger("agent");
 const warned = new Set<string>();
@@ -56,6 +51,8 @@ async function options(state: State): Promise<Options> {
       },
       // No Claude co-author trailer or link on the agent's commits and PRs
       attribution: { commit: "", pr: "" },
+      // Compacting sooner keeps every turn from resending a huge context
+      autoCompactWindow: config.conversations.context,
     },
     // The OS sandbox applies the deny rules to Bash too
     sandbox: config.agent.sandbox
@@ -77,27 +74,6 @@ function now() {
     dateStyle: "full",
     timeStyle: "short",
   });
-}
-
-/** Plan usage from the last turn's rate limit headers, which `claude setup-token` logins also get */
-export const planLimits = new Map<string, { percent: number; resetsAt: number }>();
-export let planLimitsSeen: Date | undefined;
-
-function recordLimits(info: SDKRateLimitInfo) {
-  // unifiedWindows isn't in the SDK's types yet, but carries every window at once
-  type Windows = Record<string, { utilization?: number; resetsAt?: number }>;
-  const windows = (info as { unifiedWindows?: Windows }).unifiedWindows ?? {
-    [info.rateLimitType ?? ""]: info,
-  };
-  for (const [type, { utilization, resetsAt }] of Object.entries(windows))
-    if (type && utilization !== undefined)
-      planLimits.set(type, { percent: utilization * 100, resetsAt: (resetsAt ?? 0) * 1000 });
-  planLimitsSeen = new Date();
-}
-
-// Never sends, so control requests can run without starting a turn
-async function* idle(): AsyncGenerator<never> {
-  await new Promise(() => {});
 }
 
 // What a tool was pointed at, for the log
@@ -160,8 +136,6 @@ export function createSession(name: string, file?: string, saved?: Partial<State
           for (const block of message.message.content)
             if (block.type === "tool_use")
               log.info(`${name}: ${block.name}${target(block.input as Record<string, unknown>)}`);
-        } else if (message.type === "rate_limit_event") {
-          recordLimits(message.rate_limit_info);
         } else if (message.type === "result") {
           reply =
             message.subtype === "success"
@@ -172,6 +146,10 @@ export function createSession(name: string, file?: string, saved?: Partial<State
           if (message.subtype === "success") log.info(line);
           else log.warn(line);
         }
+      }
+      if (turnGeneration === generation) {
+        state.last = Date.now();
+        save();
       }
       return reply;
     } catch (error) {
@@ -192,8 +170,18 @@ export function createSession(name: string, file?: string, saved?: Partial<State
     }
   }
 
+  // A conversation left quiet past conversations.idle starts over: its prompt cache is long
+  // gone, so resuming would resend all of it at full price
+  function freshIfIdle(prompt: string) {
+    const limit = idleLimit();
+    if (!state.id || !state.last || !limit || Date.now() - state.last < limit) return prompt;
+    log.info(`${name}: idle since ${new Date(state.last).toISOString()}, starting fresh`);
+    restart();
+    return `[New conversation: the last one here went quiet for over ${config.conversations.idle}]\n\n${prompt}`;
+  }
+
   function enqueue(prompt: string) {
-    const turn = queue.then(() => runTurn(prompt));
+    const turn = queue.then(() => runTurn(freshIfIdle(prompt)));
     queue = turn.then(() => {});
     return turn;
   }
@@ -204,20 +192,6 @@ export function createSession(name: string, file?: string, saved?: Partial<State
     },
     ask(text: string) {
       return enqueue(`${text}\n\n[Current time: ${now()}]`);
-    },
-    async compact() {
-      if (!state.id) return "Nothing to compact yet";
-      const reply = await enqueue("/compact");
-      return reply.startsWith("⚠️") || reply.startsWith("⏹️") ? reply : "🗜️ Conversation compacted";
-    },
-    /** Runs `fn` against this conversation without sending anything to Claude */
-    async inspect<T>(fn: (query: Query) => Promise<T>) {
-      const q = query({ prompt: idle(), options: await options(state) });
-      try {
-        return await fn(q);
-      } finally {
-        q.close();
-      }
     },
     /** Whether there was a turn to stop */
     stop() {
