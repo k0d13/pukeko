@@ -22,6 +22,19 @@ export async function isRunning() {
   );
 }
 
+/**
+ * Asks the running service to restart once its turns have finished and their replies are posted, so
+ * an agent running inside it can restart Pukeko without being cut off
+ */
+export async function restartAfterTurn() {
+  const pid = Number(
+    await $`systemctl --user show pukeko --property=MainPID --value`.nothrow().text(),
+  );
+  if (!pid) fail("The service isn't running, so there's no turn to wait for");
+  process.kill(pid, "SIGUSR2");
+  consola.success("Will restart after this reply");
+}
+
 async function installed() {
   if (!(await Bun.file(paths.unit).exists())) fail("Not installed, `pukeko service install` first");
 }
@@ -37,6 +50,22 @@ function action(name: string, description: string, done?: string) {
     },
   });
 }
+
+const restart = defineCommand({
+  meta: { name: "restart", description: "Restart the service" },
+  args: {
+    "after-turn": {
+      type: "boolean",
+      description: "Restart once running turns and their replies are done, not straight away",
+    },
+  },
+  async run({ args }) {
+    await installed();
+    if (args["after-turn"]) return restartAfterTurn();
+    if (await systemctl("restart", "pukeko")) process.exit(1);
+    consola.success("Restarted");
+  },
+});
 
 const install = defineCommand({
   meta: { name: "install", description: "Run Pukeko as a systemd user service, now and on boot" },
@@ -101,7 +130,7 @@ export default defineCommand({
     uninstall,
     start: action("start", "Start the service", "Started"),
     stop: action("stop", "Stop the service until started or the server reboots", "Stopped"),
-    restart: action("restart", "Restart the service", "Restarted"),
+    restart,
     // Exits 3 when stopped, which is an answer rather than a failure
     status: defineCommand({
       meta: { name: "status", description: "Whether it's running, and its latest logs" },

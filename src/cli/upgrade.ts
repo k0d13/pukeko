@@ -3,11 +3,17 @@ import { defineCommand } from "citty";
 import { consola } from "consola";
 import { compiled, repo, version } from "#/core/release.ts";
 import { fail } from "./fail.ts";
-import { isRunning, systemctl } from "./service.ts";
+import { isRunning, restartAfterTurn, systemctl } from "./service.ts";
 
 export default defineCommand({
   meta: { name: "upgrade", description: "Update to the latest release and restart" },
-  args: { check: { type: "boolean", description: "Only say whether there's a newer release" } },
+  args: {
+    check: { type: "boolean", description: "Only say whether there's a newer release" },
+    "after-turn": {
+      type: "boolean",
+      description: "Restart once running turns and their replies are done, not straight away",
+    },
+  },
   async run({ args }) {
     if (!compiled && !args.check) fail("Only compiled binaries can upgrade themselves");
     const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`);
@@ -33,6 +39,8 @@ export default defineCommand({
       await rm(temporary, { force: true });
     }
     consola.success(`Upgraded to ${latest}`);
-    if (await isRunning()) await systemctl("restart", "pukeko");
+    if (!(await isRunning())) return;
+    if (args["after-turn"]) return restartAfterTurn();
+    await systemctl("restart", "pukeko");
   },
 });
