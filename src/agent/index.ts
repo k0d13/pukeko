@@ -1,3 +1,4 @@
+import { chmod, mkdir, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { type EffortLevel, type Options, query } from "@anthropic-ai/claude-agent-sdk";
 import { config, idleLimit, secrets } from "#/core/config.ts";
@@ -17,8 +18,10 @@ const log = logger("agent");
 const warned = new Set<string>();
 
 // ${VAR} is filled from .env here, so tokens reach MCP servers but never the agent's
-// environment. Read every turn so edits apply
-async function mcpServers() {
+// environment. Read every turn so edits apply. The result goes to a private file whose
+// path is passed to claude, since the SDK's mcpServers option puts the JSON, tokens and
+// all, on claude's command line where anything that can list processes can read it
+async function mcpConfig(): Promise<Record<string, string>> {
   const file = Bun.file(paths.mcp);
   if (!(await file.exists())) return {};
   const raw = (await file.text()).replace(/\$\{(\w+)\}/g, (_, name: string) => {
@@ -28,7 +31,16 @@ async function mcpServers() {
     }
     return secrets[name] ?? "";
   });
-  return JSON.parse(raw).mcpServers ?? {};
+  const mcpServers = JSON.parse(raw).mcpServers ?? {};
+  if (!Object.keys(mcpServers).length) return {};
+  const path = join(paths.state, "mcp.json");
+  // Written aside then renamed, so a turn starting in another conversation never reads half a file
+  const temp = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}`;
+  await mkdir(paths.state, { recursive: true });
+  await Bun.write(temp, JSON.stringify({ mcpServers }));
+  await chmod(temp, 0o600);
+  await rename(temp, path);
+  return { "mcp-config": path };
 }
 
 async function options(state: State): Promise<Options> {
@@ -64,7 +76,7 @@ async function options(state: State): Promise<Options> {
     model: state.model || undefined,
     effort: state.effort || undefined,
     resume: state.id || undefined,
-    mcpServers: await mcpServers(),
+    extraArgs: await mcpConfig(),
   };
 }
 
