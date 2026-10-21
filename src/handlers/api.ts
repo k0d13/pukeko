@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { backgroundSession, type Image, type OnUpdate } from "#/agent/index.ts";
 import { readJson, write } from "#/core/files.ts";
 import { paths } from "#/core/paths.ts";
-import { chatTurn } from "#/discord/restart.ts";
+import { backgroundTurn, chatTurn } from "#/discord/restart.ts";
 
 // What handlers get from `import ... from "pukeko"`
 export { config } from "#/core/config.ts";
@@ -21,7 +21,7 @@ type AskOptions = { channel?: string; onUpdate?: OnUpdate; images?: Image[]; fol
 export async function ask(prompt: string, { channel, onUpdate, images, fold }: AskOptions = {}) {
   if (channel) return chatTurn(channel, prompt, onUpdate, { fold, images });
   if (fold) throw new Error("ask: fold needs a channel");
-  return backgroundSession().ask(prompt, onUpdate, undefined, images);
+  return backgroundTurn(() => backgroundSession().ask(prompt, onUpdate, undefined, images));
 }
 
 function storeFile(name: string) {

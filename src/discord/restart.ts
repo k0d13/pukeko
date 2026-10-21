@@ -14,6 +14,8 @@ const log = logger("discord");
 const recent = 10 * 60_000;
 const settle = 5000;
 const running = new Map<string, number>();
+// Job runs and handler asks without a channel, which `--after-turn` waits for too
+let background = 0;
 // Channels finishing a cut-off turn, so a turn that keeps restarting Pukeko only gets one more go
 const retrying = new Set<string>();
 // Set by `pukeko service restart --after-turn`: stop once no turn is running
@@ -46,11 +48,25 @@ export async function chatTurn(
   }
 }
 
+/**
+ * Work that isn't a chat turn but runs one, like a job: its reply and anything after it, so a
+ * restart after the turn doesn't cut it off. Not reported back anywhere on restart
+ */
+export async function backgroundTurn<T>(work: () => Promise<T>) {
+  background++;
+  try {
+    return await work();
+  } finally {
+    background--;
+    if (restartWhenIdle) void restartIfIdle();
+  }
+}
+
 // The turn's reply is posted by its caller just after `chatTurn` returns, so give it a moment
 // before stopping, and carry on waiting if another turn started in the meantime
 async function restartIfIdle() {
   await Bun.sleep(settle);
-  if (running.size) return;
+  if (running.size || background) return;
   void shutdown("SIGUSR2");
 }
 
@@ -78,10 +94,9 @@ export function noteRestarts() {
   process.on("SIGUSR2", () => {
     if (restartWhenIdle) return;
     restartWhenIdle = true;
+    const turns = [...running.values()].reduce((sum, n) => sum + n, 0) + background;
     log.info(
-      running.size
-        ? `Will restart once ${running.size} running turns finish`
-        : "Will restart in a moment",
+      turns ? `Will restart once ${turns} running turns finish` : "Will restart in a moment",
     );
     void restartIfIdle();
   });
