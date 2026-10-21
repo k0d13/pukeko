@@ -1,7 +1,8 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
+import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import { backgroundSession } from "#/agent/index.ts";
-import { config } from "#/core/config.ts";
+import { config, effortLevels } from "#/core/config.ts";
 import { logger, seconds } from "#/core/log.ts";
 import { paths } from "#/core/paths.ts";
 import { watchFolder } from "#/core/watch.ts";
@@ -17,15 +18,22 @@ function stop(id: string) {
   running.delete(id);
 }
 
-// jobs/<id>/job.md is YAML frontmatter, then the prompt. Without a schedule it's off
+// jobs/<id>/job.md is YAML frontmatter, then the prompt. Without a schedule it's off. A bad
+// value throws, so the job doesn't load rather than quietly running on the wrong model
 export function parseJob(text: string) {
   const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!match) throw new Error("No frontmatter");
   const meta = (Bun.YAML.parse(match[1]!) ?? {}) as Record<string, unknown>;
   const schedule = meta.enabled === false || !meta.schedule ? undefined : String(meta.schedule);
+  const effort = meta.effort ? String(meta.effort) : "";
+  if (effort && !effortLevels.includes(effort as EffortLevel))
+    throw new Error(`"effort" should be one of ${effortLevels.join(", ")}, not "${effort}"`);
   return {
     schedule,
     channel: meta.channel ? String(meta.channel) : undefined,
+    // Both fall back to pukeko.toml
+    model: meta.model ? String(meta.model) : "",
+    effort: effort as EffortLevel | "",
     prompt: match[2]!.trim(),
     // One-offs are ISO datetimes, everything else is cron (MON-FRI, @daily and so on)
     oneOff: Boolean(schedule && /^\d{4}-\d{2}-\d{2}T/.test(schedule)),
@@ -75,7 +83,9 @@ export function nextRun(at: Date | null) {
 }
 
 async function add(id: string, path: string) {
-  const { schedule, channel, prompt, oneOff } = parseJob(await Bun.file(path).text());
+  const { schedule, channel, model, effort, prompt, oneOff } = parseJob(
+    await Bun.file(path).text(),
+  );
   if (!schedule) {
     stop(id);
     return "off, it has no schedule or enabled: false";
@@ -85,7 +95,9 @@ async function add(id: string, path: string) {
     const started = Date.now();
     log.info(`Running jobs/${id}`);
     try {
-      const reply = await backgroundSession().ask(`[Scheduled job: ${id}]\n\n${prompt}`);
+      const reply = await backgroundSession({ model, effort }).ask(
+        `[Scheduled job: ${id}]\n\n${prompt}`,
+      );
       const quiet = reply.trim() === "NOTHING";
       if (!quiet) await send(channel, reply);
       const outcome = quiet ? "nothing to say" : `sent to ${channel ?? "the owner's DMs"}`;

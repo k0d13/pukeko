@@ -8,9 +8,10 @@ import { nextRun, nextTime, parseJob } from "#/jobs.ts";
 // When it runs next, or why it won't
 async function describe(path: string) {
   try {
-    const { schedule, oneOff } = parseJob(await Bun.file(path).text());
+    const { schedule, oneOff, model, effort } = parseJob(await Bun.file(path).text());
     if (!schedule) return "off";
-    return `${schedule}, ${nextRun(nextTime({ schedule, oneOff }))}`;
+    const setup = [model, effort && `${effort} effort`].filter(Boolean);
+    return `${schedule}, ${nextRun(nextTime({ schedule, oneOff }))}${setup.length ? `, ${setup.join(", ")}` : ""}`;
   } catch (error) {
     return `won't load: ${error instanceof Error ? error.message : error}`;
   }
