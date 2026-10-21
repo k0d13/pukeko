@@ -15,7 +15,7 @@ the basics from `templates/`; personality, integrations and jobs are yours to ad
 - `src/discord/`: replies to the owner (from `pukeko.toml`, or the Discord application owner) in DMs, on @mention, and via `/ask`, `/new` (optionally switching model or effort), and `/stop`, all in one registry with the workspace's commands (`commands.ts`).
   When stopped within 10 minutes of a chat, it says it's back up (and the version) there on restart, and gives a turn the restart cut off another go (`restart.ts`).
   Messages sent in a chat while a turn is running there are fed into it rather than waiting their turn, and the reply goes to the latest.
-  Image attachments (PNG, JPEG, GIF, WebP up to 3.75 MB) go straight into the prompt; other files come through as links.
+  Image attachments (PNG, JPEG, GIF, WebP up to 3.75 MB) go straight into the prompt, and so do text files (by type or extension, valid UTF-8, up to 100 KB each and 300 KB per message), labelled with who sent them; other files come through as links.
   Replies are markdown plus directives (`markup.ts`, documented for the agent in `prompt.md`), rendered as Components v2 messages (`render.ts`) with inline images, files, boxes, buttons, text inputs and selects.
   Each button carries a prompt the agent wrote; a click (`clicks.ts`) sends it as a new turn in that channel's conversation. They're kept in `.pukeko/buttons.json` (`buttons.ts`) for 90 days.
 - `src/jobs.ts`: runs `jobs/<id>/job.md` on cron or one-off schedules, rescheduling them as the files change.

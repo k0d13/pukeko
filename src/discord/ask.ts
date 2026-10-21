@@ -1,5 +1,6 @@
 import {
   ApplicationCommandType,
+  type Attachment,
   ChannelType,
   ContextMenuCommandBuilder,
   type Message,
@@ -23,25 +24,67 @@ const log = logger("discord");
 const imageTypes = new Set<string>(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const maxImage = 3.75 * 1024 * 1024;
 
-/** The message's images, base64 for the prompt, and lines listing every attachment */
+// Text files are inlined when they look like text by type or extension, decode as UTF-8, and fit
+// under a size cap per file and per message; anything else stays a link to download
+const textTypes = /^(text\/|application\/(json|xml|yaml|x-yaml|toml|javascript|x-sh)\b)/;
+const textExtensions = new Set(
+  `txt log md markdown json jsonl csv tsv yaml yml toml ini cfg conf xml html css sql diff patch
+  js mjs cjs jsx ts mts cts tsx py rb go rs java kt c h cc cpp hpp cs php swift sh bash zsh fish lua
+  pl r scala vue svelte`.split(/\s+/),
+);
+const maxText = 100 * 1024;
+const maxTextTotal = 300 * 1024;
+
+function isText(a: Attachment) {
+  const extension = a.name.split(".").pop()!.toLowerCase();
+  return textExtensions.has(extension) || (a.contentType != null && textTypes.test(a.contentType));
+}
+
+/** The attachment's bytes */
+async function download(a: Attachment) {
+  const response = await fetch(a.url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+/**
+ * The message's images, base64 for the prompt, and lines listing every attachment, followed by the
+ * contents of any text files. Those are labelled by author, as they're untrusted unless the
+ * owner's
+ */
 async function attachments(message: Message) {
   const images: Image[] = [];
   let text = "";
+  let contents = "";
+  let budget = maxTextTotal;
+  const from = message.author.id === owner.id ? "owner" : `${message.author.username}, untrusted`;
   for (const a of message.attachments.values()) {
-    let inline = false;
-    if (a.contentType && imageTypes.has(a.contentType.split(";")[0]!) && a.size <= maxImage)
-      try {
-        const response = await fetch(a.url);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = Buffer.from(await response.arrayBuffer()).toString("base64");
-        images.push({ mediaType: a.contentType.split(";")[0] as Image["mediaType"], data });
-        inline = true;
-      } catch (error) {
-        log.warn(`Couldn't fetch ${a.name}, passing its link instead`, error);
+    let note = "";
+    const type = a.contentType?.split(";")[0];
+    try {
+      if (type && imageTypes.has(type) && a.size <= maxImage) {
+        const data = Buffer.from(await download(a)).toString("base64");
+        images.push({ mediaType: type as Image["mediaType"], data });
+        note = " (image, already in your context)";
+      } else if (isText(a)) {
+        if (a.size > maxText || a.size > budget) note = " (text, too big to inline)";
+        else {
+          const bytes = await download(a);
+          if (bytes.length > maxText) throw new Error("larger than it said");
+          const body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+          budget -= bytes.length;
+          // Keep the file from closing its own wrapper
+          const safe = body.replaceAll(/<\/attachment/gi, "<\\/attachment");
+          contents += `\n\n<attachment name=${JSON.stringify(a.name)} from=${JSON.stringify(from)}>\n${safe}\n</attachment>`;
+          note = " (text, contents below, already in your context)";
+        }
       }
-    text += `\n[Attachment: ${a.name} ${a.url}${inline ? " (image, already in your context)" : ""}]`;
+    } catch (error) {
+      log.warn(`Couldn't inline ${a.name}, passing its link instead`, error);
+    }
+    text += `\n[Attachment: ${a.name} ${a.url}${note}]`;
   }
-  return { images, text };
+  return { images, text: text + contents };
 }
 
 async function describe(message: Message) {
