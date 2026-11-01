@@ -125,7 +125,8 @@ async function load(id: string, path: string) {
         log.report(`jobs/${id} failed after ${seconds(Date.now() - started)}`, error);
         return await alert(id, error);
       }
-      const quiet = reply.trim() === "NOTHING";
+      // An empty reply is as good as NOTHING; posting it would just show "(no reply)"
+      const quiet = reply.trim() === "" || reply.trim() === "NOTHING";
       if (!quiet) await send(channel, reply);
       failing.delete(id);
       const outcome = quiet ? "nothing to say" : `sent to ${channel ?? "the owner's DMs"}`;
