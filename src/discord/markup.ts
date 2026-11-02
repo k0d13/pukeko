@@ -1,9 +1,10 @@
 // The agent's replies are Discord markdown plus generic directives (the CommonMark proposal
 // remark-directive implements), each on its own line:
 //   ![alt](path)                          an image, consecutive ones share a gallery
-//   ::name[label]{key="value" flag}       a leaf: button, link, input, image, file, separator
-//   :::name[label]{...} ... :::           a container: box, select, modal
-// Anything that doesn't parse stays as text, so a reply is never lost
+//   ::name[label]{key="value" flag}       a leaf: button, link, question, image, file, separator
+//   :::name[label]{...} ... :::           a container: box, select, form
+// Anything that doesn't parse stays as text, so a reply is never lost. Directives say what
+// to ask, not how, so they aren't tied to Discord's components
 
 export type Style = "primary" | "secondary" | "success" | "danger";
 
@@ -17,26 +18,25 @@ type Control = {
   group?: string;
 };
 
-/** A question in a modal */
+/** A question in a form */
 export type Field = {
-  kind: "text" | "choice" | "checkbox" | "user" | "role" | "channel";
+  kind: "input" | "choice" | "checkbox";
   label: string;
   description?: string;
   required: boolean;
-  /** A text field's hint */
+  /** An input's hint */
   placeholder?: string;
-  /** A multi-line text field */
+  /** A multi-line input */
   paragraph?: boolean;
   /** A choice's options */
   options?: string[];
-  /** Lets a choice or picker take several */
+  /** Lets a choice take several */
   multiple?: boolean;
 };
 
 export type Action =
   | ({ kind: "button" } & Control)
-  | ({ kind: "input"; placeholder?: string } & Control)
-  | ({ kind: "modal"; title: string; fields: Field[] } & Control)
+  | ({ kind: "form"; title: string; fields: Field[] } & Control)
   | { kind: "link"; label: string; url: string; emoji?: string };
 
 export type Option = { label: string; description?: string; emoji?: string };
@@ -94,24 +94,36 @@ function style(value: string | undefined) {
   return value && styles.has(value) ? (value as Style) : undefined;
 }
 
+function control(label: string, attrs: Record<string, string>) {
+  return {
+    label,
+    prompt: attrs.prompt!,
+    style: style(attrs.style),
+    emoji: attrs.emoji,
+    repeat: flag(attrs.repeat),
+    group: attrs.group,
+  };
+}
+
 /** A leaf directive as a block or action, or why it can't be one */
 function leafBlock({ name, label, attrs }: Directive): Block | Action | string {
   switch (name) {
     case "button":
-    case "input": {
+    case "input":
+    case "choice":
+    case "checkbox": {
       if (!label) return `::${name} needs a [label]`;
       if (!attrs.prompt) return `::${name}[${label}] needs a prompt`;
-      const common = {
-        label,
-        prompt: attrs.prompt,
-        style: style(attrs.style),
-        emoji: attrs.emoji,
-        repeat: flag(attrs.repeat),
-        group: attrs.group,
-      };
-      return name === "button"
-        ? { kind: "button", ...common }
-        : { kind: "input", ...common, placeholder: attrs.placeholder };
+      const common = control(label, attrs);
+      if (name === "button") return { kind: "button", ...common };
+      // A question on its own is a form asking just that, and needs an answer
+      const field = fieldOf({
+        name,
+        label: attrs.question ?? label,
+        attrs: { required: "true", ...attrs },
+      });
+      if (typeof field === "string") return field;
+      return { kind: "form", ...common, title: attrs.title ?? label, fields: [field] };
     }
     case "link":
       if (!label || !/^https?:\/\//i.test(attrs.url ?? "")) return `::link needs a [label] and url`;
@@ -136,13 +148,12 @@ function leafBlock({ name, label, attrs }: Directive): Block | Action | string {
   }
 }
 
-// Discord's limit on a modal's components
+// The most questions a form can ask, Discord's limit on a modal's components
 const maxFields = 5;
 
-/** A field leaf inside a modal, or why it can't be one */
+/** A question leaf, or why it can't be one */
 function fieldOf({ name, label, attrs }: Directive): Field | string {
-  if (!["text", "choice", "checkbox", "user", "role", "channel"].includes(name))
-    return `unknown modal field ::${name}`;
+  if (!["input", "choice", "checkbox"].includes(name)) return `::${name} isn't a question`;
   if (!label) return `::${name} needs a [label]`;
   const field: Field = {
     kind: name as Field["kind"],
@@ -150,7 +161,7 @@ function fieldOf({ name, label, attrs }: Directive): Field | string {
     description: attrs.description,
     required: flag(attrs.required),
   };
-  if (name === "text") {
+  if (name === "input") {
     field.paragraph = flag(attrs.paragraph);
     field.placeholder = attrs.placeholder;
   }
@@ -161,7 +172,7 @@ function fieldOf({ name, label, attrs }: Directive): Field | string {
       .filter(Boolean);
     if (field.options.length < 2) return `::choice[${label}] needs options="A|B", at least two`;
   }
-  if (name !== "text" && name !== "checkbox") field.multiple = flag(attrs.multiple);
+  if (name === "choice") field.multiple = flag(attrs.multiple);
   return field;
 }
 
@@ -173,10 +184,10 @@ function hexColor(value: string | undefined) {
 export function parse(reply: string) {
   const problems: string[] = [];
   const root: Block[] = [];
-  // The box being filled, and the select or modal inside it or at the top level
+  // The box being filled, and the select or form inside it or at the top level
   let box: Extract<Block, { type: "box" }> | undefined;
   let select: Extract<Block, { type: "select" }> | undefined;
-  let modal: Extract<Action, { kind: "modal" }> | undefined;
+  let form: Extract<Action, { kind: "form" }> | undefined;
   let text: string[] = [];
   let fenced = "";
   let rich = false;
@@ -238,25 +249,25 @@ export function parse(reply: string) {
       continue;
     }
 
-    if (modal) {
+    if (form) {
       const fieldLeaf = line.match(leaf);
       if (close.test(line)) {
-        if (!modal.fields.length) problems.push(`modal "${modal.label}" has no fields`);
+        if (!form.fields.length) problems.push(`form "${form.label}" has no questions`);
         else {
-          if (modal.fields.length > maxFields) {
+          if (form.fields.length > maxFields) {
             problems.push(
-              `modal "${modal.label}" has over ${maxFields} fields, the rest were left out`,
+              `form "${form.label}" has over ${maxFields} questions, the rest were left out`,
             );
-            modal.fields = modal.fields.slice(0, maxFields);
+            form.fields = form.fields.slice(0, maxFields);
           }
-          push(modal);
+          push(form);
         }
-        modal = undefined;
+        form = undefined;
       } else if (fieldLeaf) {
         const field = fieldOf(directive(fieldLeaf));
         if (typeof field === "string") problems.push(field);
-        else modal.fields.push(field);
-      } else if (line.trim()) problems.push(`"${line.trim()}" isn't a field in a modal`);
+        else form.fields.push(field);
+      } else if (line.trim()) problems.push(`"${line.trim()}" isn't a question in a form`);
       continue;
     }
 
@@ -280,24 +291,14 @@ export function parse(reply: string) {
           repeat: flag(attrs.repeat),
           group: attrs.group,
         };
-      } else if (name === "modal") {
+      } else if (name === "form") {
         if (!label || !attrs.prompt) {
-          problems.push(`:::modal needs a [label] and prompt`);
+          problems.push(`:::form needs a [label] and prompt`);
           text.push(line);
           continue;
         }
         rich = true;
-        modal = {
-          kind: "modal",
-          label,
-          prompt: attrs.prompt,
-          title: attrs.title ?? label,
-          fields: [],
-          style: style(attrs.style),
-          emoji: attrs.emoji,
-          repeat: flag(attrs.repeat),
-          group: attrs.group,
-        };
+        form = { kind: "form", ...control(label, attrs), title: attrs.title ?? label, fields: [] };
       } else if (name === "box" && !box) {
         rich = true;
         flush();
@@ -347,9 +348,9 @@ export function parse(reply: string) {
     text.push(line);
   }
 
-  if (modal) {
-    problems.push(`modal "${modal.label}" was never closed with :::`);
-    if (modal.fields.length) push({ ...modal, fields: modal.fields.slice(0, maxFields) });
+  if (form) {
+    problems.push(`form "${form.label}" was never closed with :::`);
+    if (form.fields.length) push({ ...form, fields: form.fields.slice(0, maxFields) });
   }
   if (select) {
     problems.push(`select "${select.placeholder}" was never closed with :::`);

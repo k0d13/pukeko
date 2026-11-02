@@ -5,7 +5,6 @@ import {
   ButtonStyle,
   ComponentType,
   type Message,
-  ModalBuilder,
   TextInputStyle,
   type MessageComponentInteraction,
   type ModalData,
@@ -18,7 +17,7 @@ import type { Field } from "./markup.ts";
 import { chatTurn } from "./restart.ts";
 
 const log = logger("discord");
-const kinds = { button: "button", input: "text input", modal: "form", select: "select menu" };
+const kinds = { button: "button", input: "form", form: "form", select: "select menu" };
 
 type Node = Record<string, unknown>;
 
@@ -80,23 +79,20 @@ function excerpt(message: Message) {
   return text.length > 1500 ? `${text.slice(0, 1500)}…` : text;
 }
 
-function inputModal(customId: string, entry: Entry) {
-  return new ModalBuilder()
-    .setCustomId(customId)
-    .setTitle(entry.label.slice(0, 45))
-    .addLabelComponents((label) =>
-      label.setLabel(entry.label.slice(0, 45)).setTextInputComponent((input) => {
-        input.setCustomId("text").setStyle(TextInputStyle.Paragraph).setMaxLength(4000);
-        return entry.placeholder ? input.setPlaceholder(entry.placeholder.slice(0, 100)) : input;
-      }),
-    );
+// A form's questions, or a text input saved before forms asking for its text the same way
+function questions(entry: Entry): Field[] {
+  return (
+    entry.fields ?? [
+      {
+        kind: "input",
+        label: entry.label,
+        placeholder: entry.placeholder,
+        paragraph: true,
+        required: true,
+      },
+    ]
+  );
 }
-
-const pickers = {
-  user: ComponentType.UserSelect,
-  role: ComponentType.RoleSelect,
-  channel: ComponentType.ChannelSelect,
-} as const;
 
 // The component asking a form's question, its custom ID the question's index
 function question(field: Field, index: number): APIComponentInLabel {
@@ -104,7 +100,7 @@ function question(field: Field, index: number): APIComponentInLabel {
   const { required } = field;
   const min_values = required ? 1 : 0;
   switch (field.kind) {
-    case "text":
+    case "input":
       return {
         type: ComponentType.TextInput,
         custom_id,
@@ -115,7 +111,7 @@ function question(field: Field, index: number): APIComponentInLabel {
       };
     case "checkbox":
       return { type: ComponentType.Checkbox, custom_id };
-    case "choice": {
+    default: {
       const options = (field.options ?? [])
         .slice(0, 25)
         .map((label, i) => ({ label: label.slice(0, 100), value: String(i) }));
@@ -140,14 +136,6 @@ function question(field: Field, index: number): APIComponentInLabel {
           }
         : { type: ComponentType.RadioGroup, custom_id, required, options };
     }
-    default:
-      return {
-        type: pickers[field.kind],
-        custom_id,
-        required,
-        min_values,
-        max_values: field.multiple ? 25 : 1,
-      };
   }
 }
 
@@ -155,7 +143,7 @@ function formModal(customId: string, entry: Entry): APIModalInteractionResponseC
   return {
     custom_id: customId,
     title: (entry.title ?? entry.label).slice(0, 45),
-    components: (entry.fields ?? []).map((field, i) => ({
+    components: questions(entry).map((field, i) => ({
       type: ComponentType.Label,
       label: field.label.slice(0, 45),
       ...(field.description && { description: field.description.slice(0, 100) }),
@@ -179,28 +167,15 @@ function answer(field: Field, data: ModalData | undefined) {
       : "values" in data
         ? data.values
         : [];
-  const names = values.map((value) => {
-    if (field.kind === "choice") return field.options?.[Number(value)] ?? value;
-    if (
-      data.type !== ComponentType.UserSelect &&
-      data.type !== ComponentType.RoleSelect &&
-      data.type !== ComponentType.ChannelSelect
-    )
-      return value;
-    const user = data.users?.get(value)?.username;
-    const role = data.roles?.get(value)?.name;
-    const channel = data.channels?.get(value)?.name;
-    const name = user ? `@${user}` : role ? `@${role}` : channel ? `#${channel}` : undefined;
-    return name ? `${name} (${value})` : value;
-  });
+  const names = values.map((value) => field.options?.[Number(value)] ?? value);
   return names.join(", ") || "(skipped)";
 }
 
-// A form's answers, one line per question
+// A form's answers, one line per question when it asked several
 function answers(interaction: ModalSubmitInteraction, fields: Field[]) {
-  return fields
-    .map((field, i) => `${field.label}: ${answer(field, interaction.fields.fields.get(String(i)))}`)
-    .join("\n");
+  const given = fields.map((field, i) => answer(field, interaction.fields.fields.get(String(i))));
+  if (given.length === 1) return `Answer: ${given[0]}`;
+  return `Answers:\n${fields.map((field, i) => `${field.label}: ${given[i]}`).join("\n")}`;
 }
 
 /** Buttons, selects, text inputs and forms from the agent's replies, all with custom IDs pk:<id> */
@@ -212,20 +187,14 @@ export async function handleComponent(
     log.info(`An expired component was used, ${interaction.customId}`);
     return tell(interaction, "This has expired");
   }
-  if (entry.kind === "input" && interaction.isButton())
-    return interaction.showModal(inputModal(interaction.customId, entry));
-  if (entry.kind === "modal" && interaction.isButton())
+  if ((entry.kind === "form" || entry.kind === "input") && interaction.isButton())
     return interaction.showModal(formModal(interaction.customId, entry));
 
   // What was picked or typed, beyond the label itself
   let detail = "";
   if (interaction.isStringSelectMenu())
     detail = interaction.values.map((v) => entry.options?.[Number(v)] ?? v).join(", ");
-  else if (interaction.isModalSubmit())
-    detail =
-      entry.kind === "modal"
-        ? answers(interaction, entry.fields ?? [])
-        : interaction.fields.getTextInputValue("text").trim();
+  else if (interaction.isModalSubmit()) detail = answers(interaction, questions(entry));
 
   // Acknowledged within 3 seconds, greying out a one-time control or its whole group
   const onMessage =
@@ -253,10 +222,7 @@ export async function handleComponent(
       ? `${used}, on a Pukeko message that said:]\n${context.replace(/^/gm, "> ")}`
       : `${used}]`,
     entry.prompt,
-    detail &&
-      (entry.kind === "modal"
-        ? `Answers:\n${detail}`
-        : `${entry.kind === "select" ? "Picked" : "Typed"}: ${detail}`),
+    detail && (entry.kind === "select" ? `Picked: ${detail}` : detail),
   ]
     .filter(Boolean)
     .join("\n\n");

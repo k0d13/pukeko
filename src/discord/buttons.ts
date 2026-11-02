@@ -4,16 +4,17 @@ import { logger } from "#/core/log.ts";
 import { paths } from "#/core/paths.ts";
 import type { Field } from "./markup.ts";
 
-/** What a button, text input, modal or select does, kept so it still works after restarts */
+/** What a button, form or select does, kept so it still works after restarts */
 export type Entry = {
-  kind: "button" | "input" | "modal" | "select";
+  /** Input: a text input saved before forms, asking for text as a form does */
+  kind: "button" | "input" | "form" | "select";
   label: string;
   /** Sent as a new turn in that channel's conversation when used */
   prompt: string;
   placeholder?: string;
   /** Select option labels, by index */
   options?: string[];
-  /** A modal's title and questions */
+  /** A form's title and questions */
   title?: string;
   fields?: Field[];
   /** Stays usable after a click instead of greying out */

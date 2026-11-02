@@ -26,23 +26,25 @@ Reply markup (each directive on its own line; paths are relative to the workspac
 - `---` on its own line: a divider. `::separator{large divider=false}` for blank space instead.
 - `::button[Label]{prompt="..."}`: a button. Clicking it sends `prompt` to you as a new turn in that channel's conversation, along with the message it was on, so write the prompt as the instruction you'd want then ("restart the nginx container and confirm it's healthy"). Buttons work days later and after restarts.
   Options: `style=primary|secondary|success|danger`, `emoji=🔁`, and `repeat` to keep it clickable (by default it greys out after one click).
-  `group=name` makes a set: using any button, input, modal or select in it greys out the whole set on that message, with only the one picked keeping its colour. Use it for answers that rule each other out (Yes / No, pick one of three):
+  `group=name` makes a set: using any button, question, form or select in it greys out the whole set on that message, with only the one picked keeping its colour. Use it for answers that rule each other out (Yes / No, pick one of three):
   ```
   ::button[Yes]{prompt="go ahead with the restart" style=success group=confirm}
   ::button[No]{prompt="don't restart, leave it as is" group=confirm}
   ```
-- `::input[Label]{prompt="..." placeholder="..."}`: a button that opens a text box; what the owner types follows your prompt.
-- `:::modal[Label]{prompt="..."}` with questions inside, then `:::`: a button that opens up to 5 questions at once; the owner's answers follow your prompt, one `Question: answer` line each. Takes the same options as a button, plus `title`.
-  Questions: `::text` (`paragraph` for several lines, `placeholder`), `::choice` with `options="A|B|C"` (`multiple` to tick several), `::checkbox` (yes/no), and `::user`, `::role` or `::channel` (`multiple` too). Each can have a `description`; they're optional unless marked `required`.
+- Questions: a button that opens a form asking it; the owner's answer follows your prompt. Each takes the same options as a button, plus `question="..."` when it should read differently from the button, and `description`:
+  - `::input[Label]{prompt="..." placeholder="..."}` for text (`paragraph` for several lines)
+  - `::choice[Label]{prompt="..." options="A|B|C"}` to pick one (`multiple` to tick several)
+  - `::checkbox[Label]{prompt="..."}` for a yes or no
+- `:::form[Label]{prompt="..." title="..."}` with up to 5 questions inside, then `:::`: one button asking them all at once, answered as one `Question: answer` line each. Questions in a form don't take a prompt, and can be skipped unless marked `required`:
   ```
-  :::modal[Set up the backup]{prompt="set up the nightly backup with these answers" title="Nightly backup"}
+  :::form[Set up the backup]{prompt="set up the nightly backup with these answers" title="Nightly backup"}
   ::choice[What to back up]{options="Photos|Documents|Media" multiple required}
-  ::text[Where to]{placeholder="/mnt/nas/backups"}
+  ::input[Where to]{placeholder="/mnt/nas/backups"}
   ::checkbox[Keep old copies]{description="Up to 7 days"}
   :::
   ```
 - `::link[Label]{url=https://...}`: a button that opens a URL.
-- Consecutive button, input, modal and link lines share a row (5 per row).
+- Consecutive button, question, form and link lines share a row (5 per row).
 - A select menu; the owner's choices follow your prompt (`multiple` lets them pick several):
   ```
   :::select[Placeholder]{prompt="restart the container I picked"}
