@@ -13,7 +13,7 @@ import {
 import { logger, preview } from "#/core/log.ts";
 import { type Entry, forget, lookup } from "./buttons.ts";
 import { responder, tell, whileTyping, where } from "./client.ts";
-import type { Field } from "./markup.ts";
+import type { Field, Question } from "./markup.ts";
 import { chatTurn } from "./restart.ts";
 
 const log = logger("discord");
@@ -95,7 +95,7 @@ function questions(entry: Entry): Field[] {
 }
 
 // The component asking a form's question, its custom ID the question's index
-function question(field: Field, index: number): APIComponentInLabel {
+function question(field: Question, index: number): APIComponentInLabel {
   const custom_id = String(index);
   const { required } = field;
   const min_values = required ? 1 : 0;
@@ -143,16 +143,20 @@ function formModal(customId: string, entry: Entry): APIModalInteractionResponseC
   return {
     custom_id: customId,
     title: (entry.title ?? entry.label).slice(0, 45),
-    components: questions(entry).map((field, i) => ({
-      type: ComponentType.Label,
-      label: field.label.slice(0, 45),
-      ...(field.description && { description: field.description.slice(0, 100) }),
-      component: question(field, i),
-    })),
+    components: questions(entry).map((field, i) =>
+      field.kind === "text"
+        ? { type: ComponentType.TextDisplay, content: field.text.slice(0, 4000) }
+        : {
+            type: ComponentType.Label,
+            label: field.label.slice(0, 45),
+            ...(field.description && { description: field.description.slice(0, 100) }),
+            component: question(field, i),
+          },
+    ),
   };
 }
 
-function answer(field: Field, data: ModalData | undefined) {
+function answer(field: Question, data: ModalData | undefined) {
   if (!data) return "(skipped)";
   if (data.type === ComponentType.Checkbox) return data.value ? "yes" : "no";
   if (data.type === ComponentType.TextInput) {
@@ -173,9 +177,14 @@ function answer(field: Field, data: ModalData | undefined) {
 
 // A form's answers, one line per question when it asked several
 function answers(interaction: ModalSubmitInteraction, fields: Field[]) {
-  const given = fields.map((field, i) => answer(field, interaction.fields.fields.get(String(i))));
-  if (given.length === 1) return `Answer: ${given[0]}`;
-  return `Answers:\n${fields.map((field, i) => `${field.label}: ${given[i]}`).join("\n")}`;
+  // Answers are under each question's index among everything the form shows
+  const given = fields.flatMap((field, i) =>
+    field.kind === "text"
+      ? []
+      : [{ field, value: answer(field, interaction.fields.fields.get(String(i))) }],
+  );
+  if (given.length === 1) return `Answer: ${given[0]!.value}`;
+  return `Answers:\n${given.map(({ field, value }) => `${field.label}: ${value}`).join("\n")}`;
 }
 
 /** Buttons, selects, text inputs and forms from the agent's replies, all with custom IDs pk:<id> */

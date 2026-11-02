@@ -19,7 +19,7 @@ type Control = {
 };
 
 /** A question in a form */
-export type Field = {
+export type Question = {
   kind: "input" | "choice" | "checkbox";
   label: string;
   description?: string;
@@ -33,6 +33,9 @@ export type Field = {
   /** Lets a choice take several */
   multiple?: boolean;
 };
+
+/** What a form shows: its questions, and any text around them */
+export type Field = Question | { kind: "text"; text: string };
 
 export type Action =
   | ({ kind: "button" } & Control)
@@ -148,15 +151,15 @@ function leafBlock({ name, label, attrs }: Directive): Block | Action | string {
   }
 }
 
-// The most questions a form can ask, Discord's limit on a modal's components
+// The most questions and texts a form can show, Discord's limit on a modal's components
 const maxFields = 5;
 
 /** A question leaf, or why it can't be one */
-function fieldOf({ name, label, attrs }: Directive): Field | string {
+function fieldOf({ name, label, attrs }: Directive): Question | string {
   if (!["input", "choice", "checkbox"].includes(name)) return `::${name} isn't a question`;
   if (!label) return `::${name} needs a [label]`;
-  const field: Field = {
-    kind: name as Field["kind"],
+  const field: Question = {
+    kind: name as Question["kind"],
     label,
     description: attrs.description,
     required: flag(attrs.required),
@@ -171,8 +174,8 @@ function fieldOf({ name, label, attrs }: Directive): Field | string {
       .map((o) => o.trim())
       .filter(Boolean);
     if (field.options.length < 2) return `::choice[${label}] needs options="A|B", at least two`;
+    field.multiple = flag(attrs.multiple);
   }
-  if (name === "choice") field.multiple = flag(attrs.multiple);
   return field;
 }
 
@@ -188,6 +191,14 @@ export function parse(reply: string) {
   let box: Extract<Block, { type: "box" }> | undefined;
   let select: Extract<Block, { type: "select" }> | undefined;
   let form: Extract<Action, { kind: "form" }> | undefined;
+  // The open form's lines as written, its text since the last question, the index of the last
+  // line it's sure to own (its opener, then each question), and how many problems there were then
+  let formLines: string[] = [];
+  let note: string[] = [];
+  let formEnd = 0;
+  let formProblems = 0;
+  // A container that couldn't open, kept as text up to and including its :::
+  let dud = false;
   let text: string[] = [];
   let fenced = "";
   let rich = false;
@@ -221,16 +232,69 @@ export function parse(reply: string) {
     else blocks.push(block);
   }
 
-  for (const line of reply.split(/\r?\n/)) {
+  // A line of the open form's text, or of the reply's
+  function keep(line: string) {
+    if (form) note.push(line);
+    else text.push(line);
+  }
+
+  // The form's text since its last question, shown in it as written
+  function noted() {
+    const value = note.join("\n").replace(/^\n+|\s+$/g, "");
+    note = [];
+    if (value) form!.fields.push({ kind: "text", text: value });
+  }
+
+  // Ends the open form; one without questions stays as the text it was written as
+  function endForm() {
+    const done = form!;
+    form = undefined;
+    if (!done.fields.some((field) => field.kind !== "text")) {
+      problems.push(`form "${done.label}" has no questions`);
+      text.push(...formLines);
+      return;
+    }
+    if (done.fields.length > maxFields) {
+      problems.push(
+        `form "${done.label}" has over ${maxFields} questions and texts, the rest were left out`,
+      );
+      done.fields = done.fields.slice(0, maxFields);
+    }
+    push(done);
+  }
+
+  const lines = reply.split(/\r?\n/);
+  for (let i = 0; ; i++) {
+    if (i === lines.length) {
+      if (!form) break;
+      // A form never closed ends at its last question, and what follows is read as usual
+      problems.length = formProblems;
+      problems.push(`form "${form.label}" was never closed with :::`);
+      formLines = formLines.slice(0, formEnd + 1 - (i - formLines.length));
+      note = [];
+      fenced = "";
+      endForm();
+      i = formEnd;
+      continue;
+    }
+    const line = lines[i]!;
+    if (form) formLines.push(line);
+
     const fenceMatch = line.match(fence);
     if (fenced) {
       if (fenceMatch && fenceMatch[1]!.startsWith(fenced)) fenced = "";
-      text.push(line);
+      keep(line);
       continue;
     }
     if (fenceMatch) {
       fenced = fenceMatch[1]!;
+      keep(line);
+      continue;
+    }
+
+    if (dud) {
       text.push(line);
+      if (close.test(line)) dud = false;
       continue;
     }
 
@@ -251,62 +315,60 @@ export function parse(reply: string) {
 
     if (form) {
       const fieldLeaf = line.match(leaf);
+      const field = fieldLeaf && fieldOf(directive(fieldLeaf));
       if (close.test(line)) {
-        if (!form.fields.length) problems.push(`form "${form.label}" has no questions`);
-        else {
-          if (form.fields.length > maxFields) {
-            problems.push(
-              `form "${form.label}" has over ${maxFields} questions, the rest were left out`,
-            );
-            form.fields = form.fields.slice(0, maxFields);
-          }
-          push(form);
-        }
-        form = undefined;
-      } else if (fieldLeaf) {
-        const field = fieldOf(directive(fieldLeaf));
-        if (typeof field === "string") problems.push(field);
-        else form.fields.push(field);
-      } else if (line.trim()) problems.push(`"${line.trim()}" isn't a question in a form`);
+        noted();
+        endForm();
+      } else if (field && typeof field !== "string") {
+        noted();
+        form.fields.push(field);
+        formEnd = i;
+        formProblems = problems.length;
+      } else {
+        if (field) problems.push(field);
+        note.push(line);
+      }
       continue;
     }
 
     const opening = line.match(open);
     if (opening) {
       const { name, label, attrs } = directive(opening);
-      if (name === "select") {
-        if (!attrs.prompt) {
-          problems.push(`:::select needs a prompt`);
-          text.push(line);
-          continue;
-        }
+      const broken =
+        name === "select"
+          ? !attrs.prompt && `:::select needs a prompt`
+          : name === "form"
+            ? (!label || !attrs.prompt) && `:::form needs a [label] and prompt`
+            : name === "box"
+              ? !!box && "boxes can't be nested"
+              : `unknown container :::${name}`;
+      if (broken) {
+        problems.push(broken);
+        text.push(line);
+        dud = true;
+      } else if (name === "select") {
         rich = true;
         settle();
         select = {
           type: "select",
           placeholder: label || "Choose",
-          prompt: attrs.prompt,
+          prompt: attrs.prompt!,
           options: [],
           multiple: flag(attrs.multiple),
           repeat: flag(attrs.repeat),
           group: attrs.group,
         };
       } else if (name === "form") {
-        if (!label || !attrs.prompt) {
-          problems.push(`:::form needs a [label] and prompt`);
-          text.push(line);
-          continue;
-        }
         rich = true;
         form = { kind: "form", ...control(label, attrs), title: attrs.title ?? label, fields: [] };
-      } else if (name === "box" && !box) {
+        formLines = [line];
+        formEnd = i;
+        formProblems = problems.length;
+      } else {
         rich = true;
         flush();
         box = { type: "box", color: hexColor(attrs.color), blocks: [] };
         root.push(box);
-      } else {
-        problems.push(name === "box" ? "boxes can't be nested" : `unknown container :::${name}`);
-        text.push(line);
       }
       continue;
     }
@@ -348,10 +410,6 @@ export function parse(reply: string) {
     text.push(line);
   }
 
-  if (form) {
-    problems.push(`form "${form.label}" was never closed with :::`);
-    if (form.fields.length) push({ ...form, fields: form.fields.slice(0, maxFields) });
-  }
   if (select) {
     problems.push(`select "${select.placeholder}" was never closed with :::`);
     if (select.options.length) target().push(select);
