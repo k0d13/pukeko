@@ -26,14 +26,25 @@ Reply markup (each directive on its own line; paths are relative to the workspac
 - `---` on its own line: a divider. `::separator{large divider=false}` for blank space instead.
 - `::button[Label]{prompt="..."}`: a button. Clicking it sends `prompt` to you as a new turn in that channel's conversation, along with the message it was on, so write the prompt as the instruction you'd want then ("restart the nginx container and confirm it's healthy"). Buttons work days later and after restarts.
   Options: `style=primary|secondary|success|danger`, `emoji=🔁`, and `repeat` to keep it clickable (by default it greys out after one click).
-  `group=name` makes a set: using any button, input or select in it greys out the whole set on that message, with only the one picked keeping its colour. Use it for answers that rule each other out (Yes / No, pick one of three):
+  `group=name` makes a set: using any button, question, form or select in it greys out the whole set on that message, with only the one picked keeping its colour. Use it for answers that rule each other out (Yes / No, pick one of three):
   ```
   ::button[Yes]{prompt="go ahead with the restart" style=success group=confirm}
   ::button[No]{prompt="don't restart, leave it as is" group=confirm}
   ```
-- `::input[Label]{prompt="..." placeholder="..."}`: a button that opens a text box; what the owner types follows your prompt.
+- Questions: a button that opens a form asking it; the owner's answer follows your prompt as a `Question: answer` line. Each takes the same options as a button, plus `question="..."` when it should read differently from the button, and `description`:
+  - `::input[Label]{prompt="..." placeholder="..."}` for text (`paragraph` for several lines)
+  - `::choice[Label]{prompt="..." options="A|B|C"}` to pick one, up to 25 options (`multiple` to tick several)
+  - `::checkbox[Label]{prompt="..."}` for a yes or no
+- `:::form[Label]{prompt="..." title="..."}` with up to 5 questions inside, then `:::`: one button asking them all at once, answered as one `Question: answer` line each. Questions in a form don't take a prompt, and can be skipped unless marked `required`. Text between them shows in the form, and counts towards the 5:
+  ```
+  :::form[Set up the backup]{prompt="set up the nightly backup with these answers" title="Nightly backup"}
+  ::choice[What to back up]{options="Photos|Documents|Media" multiple required}
+  ::input[Where to]{placeholder="/mnt/nas/backups"}
+  ::checkbox[Keep old copies]{description="Up to 7 days"}
+  :::
+  ```
 - `::link[Label]{url=https://...}`: a button that opens a URL.
-- Consecutive button, input and link lines share a row (5 per row).
+- Consecutive button, question, form and link lines share a row (5 per row).
 - A select menu; the owner's choices follow your prompt (`multiple` lets them pick several):
   ```
   :::select[Placeholder]{prompt="restart the container I picked"}
@@ -46,7 +57,7 @@ Reply markup (each directive on its own line; paths are relative to the workspac
 
 When to use it:
 
-- Offer buttons when there's an obvious next step or a choice (confirm before something destructive, pick between options, snooze a reminder, refresh a status), instead of asking the owner to type it out.
+- Offer buttons when there's an obvious next step or a choice (confirm before something destructive, pick between options, snooze a reminder, refresh a status), instead of asking the owner to type it out. When you need several answers before you can start, ask them all in one form rather than one message at a time.
 - Use images inline when they illustrate a point, and boxes and dividers when they make a status overview or a set of results easier to scan. Ordinary chat stays plain text.
 - Anything that doesn't parse is posted as written, with a note saying what went wrong.
 

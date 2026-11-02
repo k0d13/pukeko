@@ -87,7 +87,7 @@ function button(action: Action) {
     prompt: action.prompt,
     repeat: action.repeat,
     ...(action.group && { group: action.group }),
-    ...(action.kind === "input" && action.placeholder && { placeholder: action.placeholder }),
+    ...(action.kind === "form" && { title: action.title, fields: action.fields }),
   });
   return out.setCustomId(id).setStyle(buttonStyles[action.style ?? "secondary"]);
 }

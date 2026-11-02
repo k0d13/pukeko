@@ -1,9 +1,10 @@
 // The agent's replies are Discord markdown plus generic directives (the CommonMark proposal
 // remark-directive implements), each on its own line:
 //   ![alt](path)                          an image, consecutive ones share a gallery
-//   ::name[label]{key="value" flag}       a leaf: button, link, input, image, file, separator
-//   :::name[label]{...} ... :::           a container: box, select
-// Anything that doesn't parse stays as text, so a reply is never lost
+//   ::name[label]{key="value" flag}       a leaf: button, link, question, image, file, separator
+//   :::name[label]{...} ... :::           a container: box, select, form
+// Anything that doesn't parse stays as text, so a reply is never lost. Directives say what
+// to ask, not how, so they aren't tied to Discord's components
 
 export type Style = "primary" | "secondary" | "success" | "danger";
 
@@ -17,9 +18,28 @@ type Control = {
   group?: string;
 };
 
+/** A question in a form */
+export type Question = {
+  kind: "input" | "choice" | "checkbox";
+  label: string;
+  description?: string;
+  required: boolean;
+  /** An input's hint */
+  placeholder?: string;
+  /** A multi-line input */
+  paragraph?: boolean;
+  /** A choice's options */
+  options?: string[];
+  /** Lets a choice take several */
+  multiple?: boolean;
+};
+
+/** What a form shows: its questions, and any text around them */
+export type Field = Question | { kind: "text"; text: string };
+
 export type Action =
   | ({ kind: "button" } & Control)
-  | ({ kind: "input"; placeholder?: string } & Control)
+  | ({ kind: "form"; title: string; fields: Field[] } & Control)
   | { kind: "link"; label: string; url: string; emoji?: string };
 
 export type Option = { label: string; description?: string; emoji?: string };
@@ -77,25 +97,33 @@ function style(value: string | undefined) {
   return value && styles.has(value) ? (value as Style) : undefined;
 }
 
+function control(label: string, attrs: Record<string, string>) {
+  return {
+    label,
+    prompt: attrs.prompt!,
+    style: style(attrs.style),
+    emoji: attrs.emoji,
+    repeat: flag(attrs.repeat),
+    group: attrs.group,
+  };
+}
+
 /** A leaf directive as a block or action, or why it can't be one */
-function leafBlock({ name, label, attrs }: Directive): Block | Action | string {
+function leafBlock({ name, label, attrs }: Directive, problems: string[]): Block | Action | string {
+  if (name === "button" || questionKinds.has(name)) {
+    if (!label) return `::${name} needs a [label]`;
+    if (!attrs.prompt) return `::${name}[${label}] needs a prompt`;
+    const common = control(label, attrs);
+    if (name === "button") return { kind: "button", ...common };
+    // A question on its own is a form asking just that, and needs an answer
+    const field = fieldOf(
+      { name, label: attrs.question ?? label, attrs: { required: "true", ...attrs } },
+      problems,
+    );
+    if (typeof field === "string") return field;
+    return { kind: "form", ...common, title: attrs.title ?? label, fields: [field] };
+  }
   switch (name) {
-    case "button":
-    case "input": {
-      if (!label) return `::${name} needs a [label]`;
-      if (!attrs.prompt) return `::${name}[${label}] needs a prompt`;
-      const common = {
-        label,
-        prompt: attrs.prompt,
-        style: style(attrs.style),
-        emoji: attrs.emoji,
-        repeat: flag(attrs.repeat),
-        group: attrs.group,
-      };
-      return name === "button"
-        ? { kind: "button", ...common }
-        : { kind: "input", ...common, placeholder: attrs.placeholder };
-    }
     case "link":
       if (!label || !/^https?:\/\//i.test(attrs.url ?? "")) return `::link needs a [label] and url`;
       return { kind: "link", label, url: attrs.url!, emoji: attrs.emoji };
@@ -119,6 +147,42 @@ function leafBlock({ name, label, attrs }: Directive): Block | Action | string {
   }
 }
 
+const questionKinds = new Set<string>(["input", "choice", "checkbox"] satisfies Question["kind"][]);
+
+// The most questions and texts a form can show, Discord's limit on a modal's components
+const maxFields = 5;
+// The most options a choice can offer, Discord's limit on a select's
+const maxOptions = 25;
+
+/** A question leaf, or why it can't be one */
+function fieldOf({ name, label, attrs }: Directive, problems: string[]): Question | string {
+  if (!questionKinds.has(name)) return `::${name} isn't a question`;
+  if (!label) return `::${name} needs a [label]`;
+  const field: Question = {
+    kind: name as Question["kind"],
+    label,
+    description: attrs.description,
+    required: flag(attrs.required),
+  };
+  if (name === "input") {
+    field.paragraph = flag(attrs.paragraph);
+    field.placeholder = attrs.placeholder;
+  }
+  if (name === "choice") {
+    field.options = (attrs.options ?? "")
+      .split("|")
+      .map((o) => o.trim())
+      .filter(Boolean);
+    if (field.options.length < 2) return `::choice[${label}] needs options="A|B", at least two`;
+    if (field.options.length > maxOptions) {
+      problems.push(`::choice[${label}] has over ${maxOptions} options, the rest were left out`);
+      field.options = field.options.slice(0, maxOptions);
+    }
+    field.multiple = flag(attrs.multiple);
+  }
+  return field;
+}
+
 function hexColor(value: string | undefined) {
   const hex = value?.replace(/^#/, "");
   return hex && /^[0-9a-f]{6}$/i.test(hex) ? parseInt(hex, 16) : undefined;
@@ -127,9 +191,18 @@ function hexColor(value: string | undefined) {
 export function parse(reply: string) {
   const problems: string[] = [];
   const root: Block[] = [];
-  // The box being filled, and the select inside it or at the top level
+  // The box being filled, and the select or form inside it or at the top level
   let box: Extract<Block, { type: "box" }> | undefined;
   let select: Extract<Block, { type: "select" }> | undefined;
+  let form: Extract<Action, { kind: "form" }> | undefined;
+  // The open form's lines as written, its text since the last question, the index of the last
+  // line it's sure to own (its opener, then each question), and how many problems there were then
+  let formLines: string[] = [];
+  let note: string[] = [];
+  let formEnd = 0;
+  let formProblems = 0;
+  // A container that couldn't open, kept as text up to and including its :::
+  let dud = false;
   let text: string[] = [];
   let fenced = "";
   let rich = false;
@@ -163,16 +236,69 @@ export function parse(reply: string) {
     else blocks.push(block);
   }
 
-  for (const line of reply.split(/\r?\n/)) {
+  // A line of the open form's text, or of the reply's
+  function keep(line: string) {
+    if (form) note.push(line);
+    else text.push(line);
+  }
+
+  // The form's text since its last question, shown in it as written
+  function noted() {
+    const value = note.join("\n").replace(/^\n+|\s+$/g, "");
+    note = [];
+    if (value) form!.fields.push({ kind: "text", text: value });
+  }
+
+  // Ends the open form; one without questions stays as the text it was written as
+  function endForm() {
+    const done = form!;
+    form = undefined;
+    if (!done.fields.some((field) => field.kind !== "text")) {
+      problems.push(`form "${done.label}" has no questions`);
+      text.push(...formLines);
+      return;
+    }
+    if (done.fields.length > maxFields) {
+      problems.push(
+        `form "${done.label}" has over ${maxFields} questions and texts, the rest were left out`,
+      );
+      done.fields = done.fields.slice(0, maxFields);
+    }
+    push(done);
+  }
+
+  const lines = reply.split(/\r?\n/);
+  for (let i = 0; ; i++) {
+    if (i === lines.length) {
+      if (!form) break;
+      // A form never closed ends at its last question, and what follows is read as usual
+      problems.length = formProblems;
+      problems.push(`form "${form.label}" was never closed with :::`);
+      formLines = formLines.slice(0, formEnd + 1 - (i - formLines.length));
+      note = [];
+      fenced = "";
+      endForm();
+      i = formEnd;
+      continue;
+    }
+    const line = lines[i]!;
+    if (form) formLines.push(line);
+
     const fenceMatch = line.match(fence);
     if (fenced) {
       if (fenceMatch && fenceMatch[1]!.startsWith(fenced)) fenced = "";
-      text.push(line);
+      keep(line);
       continue;
     }
     if (fenceMatch) {
       fenced = fenceMatch[1]!;
+      keep(line);
+      continue;
+    }
+
+    if (dud) {
       text.push(line);
+      if (close.test(line)) dud = false;
       continue;
     }
 
@@ -191,34 +317,63 @@ export function parse(reply: string) {
       continue;
     }
 
+    if (form) {
+      const fieldLeaf = line.match(leaf);
+      const field = fieldLeaf && fieldOf(directive(fieldLeaf), problems);
+      if (close.test(line)) {
+        noted();
+        endForm();
+      } else if (field && typeof field !== "string") {
+        noted();
+        form.fields.push(field);
+        formEnd = i;
+        formProblems = problems.length;
+      } else {
+        if (field) problems.push(field);
+        note.push(line);
+      }
+      continue;
+    }
+
     const opening = line.match(open);
     if (opening) {
       const { name, label, attrs } = directive(opening);
-      if (name === "select") {
-        if (!attrs.prompt) {
-          problems.push(`:::select needs a prompt`);
-          text.push(line);
-          continue;
-        }
+      const broken =
+        name === "select"
+          ? !attrs.prompt && `:::select needs a prompt`
+          : name === "form"
+            ? (!label || !attrs.prompt) && `:::form needs a [label] and prompt`
+            : name === "box"
+              ? !!box && "boxes can't be nested"
+              : `unknown container :::${name}`;
+      if (broken) {
+        problems.push(broken);
+        text.push(line);
+        dud = true;
+      } else if (name === "select") {
         rich = true;
         settle();
+        const { prompt, repeat, group } = control(label, attrs);
         select = {
           type: "select",
           placeholder: label || "Choose",
-          prompt: attrs.prompt,
+          prompt,
           options: [],
           multiple: flag(attrs.multiple),
-          repeat: flag(attrs.repeat),
-          group: attrs.group,
+          repeat,
+          group,
         };
-      } else if (name === "box" && !box) {
+      } else if (name === "form") {
+        rich = true;
+        form = { kind: "form", ...control(label, attrs), title: attrs.title ?? label, fields: [] };
+        formLines = [line];
+        formEnd = i;
+        formProblems = problems.length;
+      } else {
         rich = true;
         flush();
         box = { type: "box", color: hexColor(attrs.color), blocks: [] };
         root.push(box);
-      } else {
-        problems.push(name === "box" ? "boxes can't be nested" : `unknown container :::${name}`);
-        text.push(line);
       }
       continue;
     }
@@ -230,7 +385,7 @@ export function parse(reply: string) {
 
     const leafMatch = line.match(leaf);
     if (leafMatch) {
-      const block = leafBlock(directive(leafMatch));
+      const block = leafBlock(directive(leafMatch), problems);
       if (typeof block === "string") {
         problems.push(block);
         text.push(line);

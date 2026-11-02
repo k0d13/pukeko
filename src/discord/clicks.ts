@@ -1,20 +1,23 @@
 import {
+  type APIComponentInLabel,
   type APIMessageTopLevelComponent,
+  type APIModalInteractionResponseCallbackData,
   ButtonStyle,
   ComponentType,
   type Message,
-  ModalBuilder,
   TextInputStyle,
   type MessageComponentInteraction,
+  type ModalData,
   type ModalSubmitInteraction,
 } from "discord.js";
 import { logger, preview } from "#/core/log.ts";
 import { type Entry, forget, lookup } from "./buttons.ts";
 import { responder, tell, whileTyping, where } from "./client.ts";
+import type { Field, Question } from "./markup.ts";
 import { chatTurn } from "./restart.ts";
 
 const log = logger("discord");
-const kinds = { button: "button", input: "text input", select: "select menu" };
+const kinds = { button: "button", input: "form", form: "form", select: "select menu" };
 
 type Node = Record<string, unknown>;
 
@@ -76,19 +79,129 @@ function excerpt(message: Message) {
   return text.length > 1500 ? `${text.slice(0, 1500)}…` : text;
 }
 
-function inputModal(customId: string, entry: Entry) {
-  return new ModalBuilder()
-    .setCustomId(customId)
-    .setTitle(entry.label.slice(0, 45))
-    .addLabelComponents((label) =>
-      label.setLabel(entry.label.slice(0, 45)).setTextInputComponent((input) => {
-        input.setCustomId("text").setStyle(TextInputStyle.Paragraph).setMaxLength(4000);
-        return entry.placeholder ? input.setPlaceholder(entry.placeholder.slice(0, 100)) : input;
-      }),
-    );
+// A form's questions, or a text input saved before forms asking for its text the same way
+function questions(entry: Entry): Field[] {
+  return (
+    entry.fields ?? [
+      {
+        kind: "input",
+        label: entry.label,
+        placeholder: entry.placeholder,
+        paragraph: true,
+        required: true,
+      },
+    ]
+  );
 }
 
-/** Buttons, selects and text inputs from the agent's replies, all with custom IDs pk:<id> */
+// How a required checkbox is asked
+const yesNo = ["Yes", "No"];
+
+// The component asking a form's question, its custom ID the question's index
+function question(field: Question, index: number): APIComponentInLabel {
+  const custom_id = String(index);
+  const { required } = field;
+  const min_values = required ? 1 : 0;
+  switch (field.kind) {
+    case "input":
+      return {
+        type: ComponentType.TextInput,
+        custom_id,
+        style: field.paragraph ? TextInputStyle.Paragraph : TextInputStyle.Short,
+        required,
+        max_length: 4000,
+        ...(field.placeholder && { placeholder: field.placeholder.slice(0, 100) }),
+      };
+    // A checkbox can't be required and always answers, so one that needs an answer asks yes or no
+    case "checkbox":
+      return required
+        ? {
+            type: ComponentType.RadioGroup,
+            custom_id,
+            required,
+            options: yesNo.map((label, i) => ({ label, value: String(i) })),
+          }
+        : { type: ComponentType.Checkbox, custom_id };
+    default: {
+      const options = (field.options ?? [])
+        .slice(0, 25)
+        .map((label, i) => ({ label: label.slice(0, 100), value: String(i) }));
+      // Radio and checkbox groups take up to 10 options, selects 25
+      if (options.length > 10)
+        return {
+          type: ComponentType.StringSelect,
+          custom_id,
+          required,
+          options,
+          min_values,
+          max_values: field.multiple ? options.length : 1,
+        };
+      return field.multiple
+        ? {
+            type: ComponentType.CheckboxGroup,
+            custom_id,
+            required,
+            options,
+            min_values,
+            max_values: options.length,
+          }
+        : { type: ComponentType.RadioGroup, custom_id, required, options };
+    }
+  }
+}
+
+function formModal(customId: string, entry: Entry): APIModalInteractionResponseCallbackData {
+  return {
+    custom_id: customId,
+    title: (entry.title ?? entry.label).slice(0, 45),
+    components: questions(entry).map((field, i) =>
+      field.kind === "text"
+        ? { type: ComponentType.TextDisplay, content: field.text.slice(0, 4000) }
+        : {
+            type: ComponentType.Label,
+            label: field.label.slice(0, 45),
+            ...(field.description && { description: field.description.slice(0, 100) }),
+            component: question(field, i),
+          },
+    ),
+  };
+}
+
+function answer(field: Question, data: ModalData | undefined) {
+  if (!data) return "(skipped)";
+  if (data.type === ComponentType.Checkbox) return data.value ? "yes" : "no";
+  if (data.type === ComponentType.TextInput) {
+    const text = data.value.trim();
+    return text.includes("\n") ? `\n${text.replace(/^/gm, "> ")}` : text || "(skipped)";
+  }
+  const values =
+    data.type === ComponentType.RadioGroup
+      ? data.value === null
+        ? []
+        : [data.value]
+      : "values" in data
+        ? data.values
+        : [];
+  const options = field.kind === "checkbox" ? ["yes", "no"] : field.options;
+  const names = values.map((value) => options?.[Number(value)] ?? value);
+  return names.join(", ") || "(skipped)";
+}
+
+// A form's answers, a "Question: answer" line each
+function answers(interaction: ModalSubmitInteraction, entry: Entry) {
+  const { fields } = interaction.fields;
+  return questions(entry)
+    .flatMap((field, i) => {
+      if (field.kind === "text") return [];
+      // Under each question's index among everything the form shows, or "text" in an input
+      // modal opened before forms
+      const data = fields.get(String(i)) ?? (entry.fields ? undefined : fields.get("text"));
+      return [`${field.label}: ${answer(field, data)}`];
+    })
+    .join("\n");
+}
+
+/** Buttons, selects, text inputs and forms from the agent's replies, all with custom IDs pk:<id> */
 export async function handleComponent(
   interaction: MessageComponentInteraction | ModalSubmitInteraction,
 ) {
@@ -97,15 +210,14 @@ export async function handleComponent(
     log.info(`An expired component was used, ${interaction.customId}`);
     return tell(interaction, "This has expired");
   }
-  if (entry.kind === "input" && interaction.isButton())
-    return interaction.showModal(inputModal(interaction.customId, entry));
+  if ((entry.kind === "form" || entry.kind === "input") && interaction.isButton())
+    return interaction.showModal(formModal(interaction.customId, entry));
 
   // What was picked or typed, beyond the label itself
   let detail = "";
   if (interaction.isStringSelectMenu())
     detail = interaction.values.map((v) => entry.options?.[Number(v)] ?? v).join(", ");
-  else if (interaction.isModalSubmit())
-    detail = interaction.fields.getTextInputValue("text").trim();
+  else if (interaction.isModalSubmit()) detail = answers(interaction, entry);
 
   // Acknowledged within 3 seconds, greying out a one-time control or its whole group
   const onMessage =
@@ -133,7 +245,7 @@ export async function handleComponent(
       ? `${used}, on a Pukeko message that said:]\n${context.replace(/^/gm, "> ")}`
       : `${used}]`,
     entry.prompt,
-    detail && `${entry.kind === "select" ? "Picked" : "Typed"}: ${detail}`,
+    detail && (entry.kind === "select" ? `Picked: ${detail}` : detail),
   ]
     .filter(Boolean)
     .join("\n\n");
