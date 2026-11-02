@@ -31,7 +31,7 @@ Reply markup (each directive on its own line; paths are relative to the workspac
   ::button[Yes]{prompt="go ahead with the restart" style=success group=confirm}
   ::button[No]{prompt="don't restart, leave it as is" group=confirm}
   ```
-- Questions: a button that opens a form asking it; the owner's answer follows your prompt. Each takes the same options as a button, plus `question="..."` when it should read differently from the button, and `description`:
+- Questions: a button that opens a form asking it; the owner's answer follows your prompt as a `Question: answer` line. Each takes the same options as a button, plus `question="..."` when it should read differently from the button, and `description`:
   - `::input[Label]{prompt="..." placeholder="..."}` for text (`paragraph` for several lines)
   - `::choice[Label]{prompt="..." options="A|B|C"}` to pick one, up to 25 options (`multiple` to tick several)
   - `::checkbox[Label]{prompt="..."}` for a yes or no

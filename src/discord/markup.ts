@@ -110,23 +110,20 @@ function control(label: string, attrs: Record<string, string>) {
 
 /** A leaf directive as a block or action, or why it can't be one */
 function leafBlock({ name, label, attrs }: Directive, problems: string[]): Block | Action | string {
+  if (name === "button" || questionKinds.has(name)) {
+    if (!label) return `::${name} needs a [label]`;
+    if (!attrs.prompt) return `::${name}[${label}] needs a prompt`;
+    const common = control(label, attrs);
+    if (name === "button") return { kind: "button", ...common };
+    // A question on its own is a form asking just that, and needs an answer
+    const field = fieldOf(
+      { name, label: attrs.question ?? label, attrs: { required: "true", ...attrs } },
+      problems,
+    );
+    if (typeof field === "string") return field;
+    return { kind: "form", ...common, title: attrs.title ?? label, fields: [field] };
+  }
   switch (name) {
-    case "button":
-    case "input":
-    case "choice":
-    case "checkbox": {
-      if (!label) return `::${name} needs a [label]`;
-      if (!attrs.prompt) return `::${name}[${label}] needs a prompt`;
-      const common = control(label, attrs);
-      if (name === "button") return { kind: "button", ...common };
-      // A question on its own is a form asking just that, and needs an answer
-      const field = fieldOf(
-        { name, label: attrs.question ?? label, attrs: { required: "true", ...attrs } },
-        problems,
-      );
-      if (typeof field === "string") return field;
-      return { kind: "form", ...common, title: attrs.title ?? label, fields: [field] };
-    }
     case "link":
       if (!label || !/^https?:\/\//i.test(attrs.url ?? "")) return `::link needs a [label] and url`;
       return { kind: "link", label, url: attrs.url!, emoji: attrs.emoji };
@@ -150,6 +147,8 @@ function leafBlock({ name, label, attrs }: Directive, problems: string[]): Block
   }
 }
 
+const questionKinds = new Set<string>(["input", "choice", "checkbox"] satisfies Question["kind"][]);
+
 // The most questions and texts a form can show, Discord's limit on a modal's components
 const maxFields = 5;
 // The most options a choice can offer, Discord's limit on a select's
@@ -157,7 +156,7 @@ const maxOptions = 25;
 
 /** A question leaf, or why it can't be one */
 function fieldOf({ name, label, attrs }: Directive, problems: string[]): Question | string {
-  if (!["input", "choice", "checkbox"].includes(name)) return `::${name} isn't a question`;
+  if (!questionKinds.has(name)) return `::${name} isn't a question`;
   if (!label) return `::${name} needs a [label]`;
   const field: Question = {
     kind: name as Question["kind"],
@@ -354,14 +353,15 @@ export function parse(reply: string) {
       } else if (name === "select") {
         rich = true;
         settle();
+        const { prompt, repeat, group } = control(label, attrs);
         select = {
           type: "select",
           placeholder: label || "Choose",
-          prompt: attrs.prompt!,
+          prompt,
           options: [],
           multiple: flag(attrs.multiple),
-          repeat: flag(attrs.repeat),
-          group: attrs.group,
+          repeat,
+          group,
         };
       } else if (name === "form") {
         rich = true;

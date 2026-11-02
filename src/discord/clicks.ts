@@ -187,16 +187,18 @@ function answer(field: Question, data: ModalData | undefined) {
   return names.join(", ") || "(skipped)";
 }
 
-// A form's answers, one line per question when it asked several
-function answers(interaction: ModalSubmitInteraction, fields: Field[]) {
-  // Answers are under each question's index among everything the form shows
-  const given = fields.flatMap((field, i) =>
-    field.kind === "text"
-      ? []
-      : [{ field, value: answer(field, interaction.fields.fields.get(String(i))) }],
-  );
-  if (given.length === 1) return `Answer: ${given[0]!.value}`;
-  return `Answers:\n${given.map(({ field, value }) => `${field.label}: ${value}`).join("\n")}`;
+// A form's answers, a "Question: answer" line each
+function answers(interaction: ModalSubmitInteraction, entry: Entry) {
+  const { fields } = interaction.fields;
+  return questions(entry)
+    .flatMap((field, i) => {
+      if (field.kind === "text") return [];
+      // Under each question's index among everything the form shows, or "text" in an input
+      // modal opened before forms
+      const data = fields.get(String(i)) ?? (entry.fields ? undefined : fields.get("text"));
+      return [`${field.label}: ${answer(field, data)}`];
+    })
+    .join("\n");
 }
 
 /** Buttons, selects, text inputs and forms from the agent's replies, all with custom IDs pk:<id> */
@@ -215,7 +217,7 @@ export async function handleComponent(
   let detail = "";
   if (interaction.isStringSelectMenu())
     detail = interaction.values.map((v) => entry.options?.[Number(v)] ?? v).join(", ");
-  else if (interaction.isModalSubmit()) detail = answers(interaction, questions(entry));
+  else if (interaction.isModalSubmit()) detail = answers(interaction, entry);
 
   // Acknowledged within 3 seconds, greying out a one-time control or its whole group
   const onMessage =
