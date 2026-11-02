@@ -109,7 +109,7 @@ function control(label: string, attrs: Record<string, string>) {
 }
 
 /** A leaf directive as a block or action, or why it can't be one */
-function leafBlock({ name, label, attrs }: Directive): Block | Action | string {
+function leafBlock({ name, label, attrs }: Directive, problems: string[]): Block | Action | string {
   switch (name) {
     case "button":
     case "input":
@@ -120,11 +120,10 @@ function leafBlock({ name, label, attrs }: Directive): Block | Action | string {
       const common = control(label, attrs);
       if (name === "button") return { kind: "button", ...common };
       // A question on its own is a form asking just that, and needs an answer
-      const field = fieldOf({
-        name,
-        label: attrs.question ?? label,
-        attrs: { required: "true", ...attrs },
-      });
+      const field = fieldOf(
+        { name, label: attrs.question ?? label, attrs: { required: "true", ...attrs } },
+        problems,
+      );
       if (typeof field === "string") return field;
       return { kind: "form", ...common, title: attrs.title ?? label, fields: [field] };
     }
@@ -153,9 +152,11 @@ function leafBlock({ name, label, attrs }: Directive): Block | Action | string {
 
 // The most questions and texts a form can show, Discord's limit on a modal's components
 const maxFields = 5;
+// The most options a choice can offer, Discord's limit on a select's
+const maxOptions = 25;
 
 /** A question leaf, or why it can't be one */
-function fieldOf({ name, label, attrs }: Directive): Question | string {
+function fieldOf({ name, label, attrs }: Directive, problems: string[]): Question | string {
   if (!["input", "choice", "checkbox"].includes(name)) return `::${name} isn't a question`;
   if (!label) return `::${name} needs a [label]`;
   const field: Question = {
@@ -174,6 +175,10 @@ function fieldOf({ name, label, attrs }: Directive): Question | string {
       .map((o) => o.trim())
       .filter(Boolean);
     if (field.options.length < 2) return `::choice[${label}] needs options="A|B", at least two`;
+    if (field.options.length > maxOptions) {
+      problems.push(`::choice[${label}] has over ${maxOptions} options, the rest were left out`);
+      field.options = field.options.slice(0, maxOptions);
+    }
     field.multiple = flag(attrs.multiple);
   }
   return field;
@@ -315,7 +320,7 @@ export function parse(reply: string) {
 
     if (form) {
       const fieldLeaf = line.match(leaf);
-      const field = fieldLeaf && fieldOf(directive(fieldLeaf));
+      const field = fieldLeaf && fieldOf(directive(fieldLeaf), problems);
       if (close.test(line)) {
         noted();
         endForm();
@@ -380,7 +385,7 @@ export function parse(reply: string) {
 
     const leafMatch = line.match(leaf);
     if (leafMatch) {
-      const block = leafBlock(directive(leafMatch));
+      const block = leafBlock(directive(leafMatch), problems);
       if (typeof block === "string") {
         problems.push(block);
         text.push(line);

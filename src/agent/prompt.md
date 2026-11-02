@@ -33,7 +33,7 @@ Reply markup (each directive on its own line; paths are relative to the workspac
   ```
 - Questions: a button that opens a form asking it; the owner's answer follows your prompt. Each takes the same options as a button, plus `question="..."` when it should read differently from the button, and `description`:
   - `::input[Label]{prompt="..." placeholder="..."}` for text (`paragraph` for several lines)
-  - `::choice[Label]{prompt="..." options="A|B|C"}` to pick one (`multiple` to tick several)
+  - `::choice[Label]{prompt="..." options="A|B|C"}` to pick one, up to 25 options (`multiple` to tick several)
   - `::checkbox[Label]{prompt="..."}` for a yes or no
 - `:::form[Label]{prompt="..." title="..."}` with up to 5 questions inside, then `:::`: one button asking them all at once, answered as one `Question: answer` line each. Questions in a form don't take a prompt, and can be skipped unless marked `required`. Text between them shows in the form, and counts towards the 5:
   ```

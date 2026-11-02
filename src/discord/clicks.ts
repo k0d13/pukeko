@@ -94,6 +94,9 @@ function questions(entry: Entry): Field[] {
   );
 }
 
+// How a required checkbox is asked
+const yesNo = ["Yes", "No"];
+
 // The component asking a form's question, its custom ID the question's index
 function question(field: Question, index: number): APIComponentInLabel {
   const custom_id = String(index);
@@ -109,8 +112,16 @@ function question(field: Question, index: number): APIComponentInLabel {
         max_length: 4000,
         ...(field.placeholder && { placeholder: field.placeholder.slice(0, 100) }),
       };
+    // A checkbox can't be required and always answers, so one that needs an answer asks yes or no
     case "checkbox":
-      return { type: ComponentType.Checkbox, custom_id };
+      return required
+        ? {
+            type: ComponentType.RadioGroup,
+            custom_id,
+            required,
+            options: yesNo.map((label, i) => ({ label, value: String(i) })),
+          }
+        : { type: ComponentType.Checkbox, custom_id };
     default: {
       const options = (field.options ?? [])
         .slice(0, 25)
@@ -171,7 +182,8 @@ function answer(field: Question, data: ModalData | undefined) {
       : "values" in data
         ? data.values
         : [];
-  const names = values.map((value) => field.options?.[Number(value)] ?? value);
+  const options = field.kind === "checkbox" ? ["yes", "no"] : field.options;
+  const names = values.map((value) => options?.[Number(value)] ?? value);
   return names.join(", ") || "(skipped)";
 }
 
