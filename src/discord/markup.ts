@@ -2,7 +2,7 @@
 // remark-directive implements), each on its own line:
 //   ![alt](path)                          an image, consecutive ones share a gallery
 //   ::name[label]{key="value" flag}       a leaf: button, link, input, image, file, separator
-//   :::name[label]{...} ... :::           a container: box, select
+//   :::name[label]{...} ... :::           a container: box, select, modal
 // Anything that doesn't parse stays as text, so a reply is never lost
 
 export type Style = "primary" | "secondary" | "success" | "danger";
@@ -17,9 +17,26 @@ type Control = {
   group?: string;
 };
 
+/** A question in a modal */
+export type Field = {
+  kind: "text" | "choice" | "checkbox" | "user" | "role" | "channel";
+  label: string;
+  description?: string;
+  required: boolean;
+  /** A text field's hint */
+  placeholder?: string;
+  /** A multi-line text field */
+  paragraph?: boolean;
+  /** A choice's options */
+  options?: string[];
+  /** Lets a choice or picker take several */
+  multiple?: boolean;
+};
+
 export type Action =
   | ({ kind: "button" } & Control)
   | ({ kind: "input"; placeholder?: string } & Control)
+  | ({ kind: "modal"; title: string; fields: Field[] } & Control)
   | { kind: "link"; label: string; url: string; emoji?: string };
 
 export type Option = { label: string; description?: string; emoji?: string };
@@ -119,6 +136,35 @@ function leafBlock({ name, label, attrs }: Directive): Block | Action | string {
   }
 }
 
+// Discord's limit on a modal's components
+const maxFields = 5;
+
+/** A field leaf inside a modal, or why it can't be one */
+function fieldOf({ name, label, attrs }: Directive): Field | string {
+  if (!["text", "choice", "checkbox", "user", "role", "channel"].includes(name))
+    return `unknown modal field ::${name}`;
+  if (!label) return `::${name} needs a [label]`;
+  const field: Field = {
+    kind: name as Field["kind"],
+    label,
+    description: attrs.description,
+    required: flag(attrs.required),
+  };
+  if (name === "text") {
+    field.paragraph = flag(attrs.paragraph);
+    field.placeholder = attrs.placeholder;
+  }
+  if (name === "choice") {
+    field.options = (attrs.options ?? "")
+      .split("|")
+      .map((o) => o.trim())
+      .filter(Boolean);
+    if (field.options.length < 2) return `::choice[${label}] needs options="A|B", at least two`;
+  }
+  if (name !== "text" && name !== "checkbox") field.multiple = flag(attrs.multiple);
+  return field;
+}
+
 function hexColor(value: string | undefined) {
   const hex = value?.replace(/^#/, "");
   return hex && /^[0-9a-f]{6}$/i.test(hex) ? parseInt(hex, 16) : undefined;
@@ -127,9 +173,10 @@ function hexColor(value: string | undefined) {
 export function parse(reply: string) {
   const problems: string[] = [];
   const root: Block[] = [];
-  // The box being filled, and the select inside it or at the top level
+  // The box being filled, and the select or modal inside it or at the top level
   let box: Extract<Block, { type: "box" }> | undefined;
   let select: Extract<Block, { type: "select" }> | undefined;
+  let modal: Extract<Action, { kind: "modal" }> | undefined;
   let text: string[] = [];
   let fenced = "";
   let rich = false;
@@ -191,6 +238,28 @@ export function parse(reply: string) {
       continue;
     }
 
+    if (modal) {
+      const fieldLeaf = line.match(leaf);
+      if (close.test(line)) {
+        if (!modal.fields.length) problems.push(`modal "${modal.label}" has no fields`);
+        else {
+          if (modal.fields.length > maxFields) {
+            problems.push(
+              `modal "${modal.label}" has over ${maxFields} fields, the rest were left out`,
+            );
+            modal.fields = modal.fields.slice(0, maxFields);
+          }
+          push(modal);
+        }
+        modal = undefined;
+      } else if (fieldLeaf) {
+        const field = fieldOf(directive(fieldLeaf));
+        if (typeof field === "string") problems.push(field);
+        else modal.fields.push(field);
+      } else if (line.trim()) problems.push(`"${line.trim()}" isn't a field in a modal`);
+      continue;
+    }
+
     const opening = line.match(open);
     if (opening) {
       const { name, label, attrs } = directive(opening);
@@ -208,6 +277,24 @@ export function parse(reply: string) {
           prompt: attrs.prompt,
           options: [],
           multiple: flag(attrs.multiple),
+          repeat: flag(attrs.repeat),
+          group: attrs.group,
+        };
+      } else if (name === "modal") {
+        if (!label || !attrs.prompt) {
+          problems.push(`:::modal needs a [label] and prompt`);
+          text.push(line);
+          continue;
+        }
+        rich = true;
+        modal = {
+          kind: "modal",
+          label,
+          prompt: attrs.prompt,
+          title: attrs.title ?? label,
+          fields: [],
+          style: style(attrs.style),
+          emoji: attrs.emoji,
           repeat: flag(attrs.repeat),
           group: attrs.group,
         };
@@ -260,6 +347,10 @@ export function parse(reply: string) {
     text.push(line);
   }
 
+  if (modal) {
+    problems.push(`modal "${modal.label}" was never closed with :::`);
+    if (modal.fields.length) push({ ...modal, fields: modal.fields.slice(0, maxFields) });
+  }
   if (select) {
     problems.push(`select "${select.placeholder}" was never closed with :::`);
     if (select.options.length) target().push(select);
