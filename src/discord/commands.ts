@@ -41,7 +41,10 @@ let registered = "";
 
 /** Registers every command, skipping the call when nothing changed */
 export async function registerCommands() {
-  const all = [...commands.values()].map(({ data }) => ({ contexts, ...data }));
+  const all = [...commands.values()].map(({ data }) => ({
+    ...data,
+    contexts: data.contexts ?? contexts,
+  }));
   const json = JSON.stringify(all);
   if (json === registered) return;
   await client.application!.commands.set(all);
